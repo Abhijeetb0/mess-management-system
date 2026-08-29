@@ -27,6 +27,26 @@ export const getAllStudents = () =>
   getDocs(query(collection(db, 'users'), where('role', '==', 'student')))
     .then(snap => snap.docs.map(d => ({ uid: d.id, ...d.data() })));
 
+/** Live listener for all students (so approval status updates in real-time) */
+export const listenAllStudents = (callback) => {
+  const q = query(collection(db, 'users'), where('role', '==', 'student'));
+  return onSnapshot(q, snap =>
+    callback(
+      snap.docs
+        .map(d => ({ uid: d.id, ...d.data() }))
+        .sort((a, b) => (a.rollNumber || '').localeCompare(b.rollNumber || ''))
+    )
+  );
+};
+
+/** Approve a student registration (sets isApproved: true) */
+export const approveStudent = (uid) =>
+  updateDoc(doc(db, 'users', uid), { isApproved: true,  updatedAt: serverTimestamp() });
+
+/** Reject / unapprove a student registration */
+export const rejectStudent = (uid) =>
+  updateDoc(doc(db, 'users', uid), { isApproved: false, updatedAt: serverTimestamp() });
+
 /** Fetch all users with role = 'committee' */
 export const getAllCommittee = () =>
   getDocs(query(collection(db, 'users'), where('role', '==', 'committee')))
@@ -158,6 +178,52 @@ export const rebuildBlocklist = async () => {
 
   await setDoc(doc(db, 'blocklist', today), { uids, updatedAt: serverTimestamp() });
   return uids;
+};
+
+/* ── Penalties ──────────────────────────────────────────── */
+
+/**
+ * Apply a penalty to a student:
+ * - Deducts amount from wallet (min 0)
+ * - Writes a record to /penalties collection
+ */
+export const applyPenalty = async (uid, { amount, reason, appliedBy }) => {
+  const userSnap = await getDoc(doc(db, 'users', uid));
+  if (!userSnap.exists()) throw new Error('Student not found');
+  const student = userSnap.data();
+  const newBalance = Math.max(0, (student.walletBalance || 0) - amount);
+
+  await Promise.all([
+    // Deduct from wallet
+    updateDoc(doc(db, 'users', uid), {
+      walletBalance: newBalance,
+      updatedAt: serverTimestamp(),
+    }),
+    // Write penalty record
+    addDoc(collection(db, 'penalties'), {
+      uid,
+      studentName:  student.displayName || '',
+      rollNumber:   student.rollNumber  || '',
+      amount,
+      reason,
+      appliedBy,
+      appliedAt:    serverTimestamp(),
+      balanceBefore: student.walletBalance || 0,
+      balanceAfter:  newBalance,
+    }),
+  ]);
+  return newBalance;
+};
+
+/** Live listener for penalty records, ordered newest first */
+export const listenPenalties = (callback) => {
+  const q = query(
+    collection(db, 'penalties'),
+    orderBy('appliedAt', 'desc')
+  );
+  return onSnapshot(q, snap =>
+    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+  );
 };
 
 /* ── Menu ───────────────────────────────────────────────── */

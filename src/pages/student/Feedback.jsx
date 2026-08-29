@@ -380,24 +380,28 @@ export default function Feedback({ direction }) {
     });
   }, [user?.uid, messages.length, isStudent]);
 
-  /* Auto-poll trigger — fires for committee/admin when page loads */
+  /* Auto-poll trigger — fires for committee/admin when page loads.
+     Uses sequential for...of (not forEach) so each Firestore check
+     completes before the next — prevents race-condition duplicates. */
   useEffect(() => {
     if (!isCommittee || !user) return;
     const now  = new Date();
     const hour = now.getHours();
     const date = format(now, 'yyyy-MM-dd');
 
-    MEAL_POLLS.forEach(async ({ meal, endHour, question, options }) => {
-      if (hour < endHour) return; // meal hasn't ended yet
-      const already = await hasAutoPollForMeal(meal, date);
-      if (already) return;
-      await sendFeedbackPoll(
-        { uid: user.uid, displayName: 'Mess Committee', rollNumber: '', role: user.role },
-        question,
-        options,
-        { isAutomatic: true, pollMeal: meal, pollDate: date }
-      );
-    });
+    (async () => {
+      for (const { meal, endHour, question, options } of MEAL_POLLS) {
+        if (hour < endHour) continue; // meal hasn't ended yet
+        const already = await hasAutoPollForMeal(meal, date);
+        if (already) continue;
+        await sendFeedbackPoll(
+          { uid: user.uid, displayName: 'Mess Committee', rollNumber: '', role: user.role },
+          question,
+          options,
+          { isAutomatic: true, pollMeal: meal, pollDate: date }
+        );
+      }
+    })();
   }, [isCommittee, user]);
 
   /* Latest active poll (for quick-vote button in input bar) */

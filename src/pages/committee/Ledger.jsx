@@ -4,8 +4,8 @@ import { CheckCircle, XCircle, AlertTriangle, Printer, FileText, Calendar, Eye, 
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { QRCodeSVG } from 'qrcode.react';
-import { listenPendingOptOuts, approveOptOut, rejectOptOut } from '../../lib/firestoreService';
-import { getUser } from '../../lib/firestoreService';
+import { listenPendingOptOuts, approveOptOut, rejectOptOut, getUser, applyPenalty, listenPenalties } from '../../lib/firestoreService';
+import { useAuth } from '../../context/AuthContext';
 
 /* ─────────────────────────────────────────────────────────
    Committee — Ledger & Opt-Out Requests (Phase 2: live)
@@ -38,19 +38,25 @@ function DocViewModal({ base64, name, onClose }) {
 
 export default function Ledger() {
   const [requests, setRequests] = useState([]);
-  const [loading,  setLoading]  = useState(true);
+  const [loading, setLoading] = useState(true);
   const [showPrint, setShowPrint] = useState(false);
-  const [docView, setDocView]   = useState(null);
+  const [docView, setDocView] = useState(null);
   const [penaltyUid, setPenaltyUid] = useState('');
   const [penaltyAmt, setPenaltyAmt] = useState('');
+  const [penaltyReason, setPenaltyReason] = useState('');
+  const [penaltyError, setPenaltyError] = useState('');
+  const [penaltyBusy, setPenaltyBusy] = useState(false);
+  const [penalties, setPenalties] = useState([]);
   const [processing, setProcessing] = useState({});
+  const { user } = useAuth();
 
   useEffect(() => {
-    const unsub = listenPendingOptOuts((data) => {
+    const unsub1 = listenPendingOptOuts((data) => {
       setRequests(data);
       setLoading(false);
     });
-    return () => unsub?.();
+    const unsub2 = listenPenalties(setPenalties);
+    return () => { unsub1?.(); unsub2?.(); };
   }, []);
 
   const handleApprove = async (r) => {
@@ -60,8 +66,8 @@ export default function Ledger() {
       // Get current wallet balance
       const student = await getUser(r.uid);
       await approveOptOut(r.id, {
-        uid:            r.uid,
-        refundAmount:   r.estimatedRefund || 0,
+        uid: r.uid,
+        refundAmount: r.estimatedRefund || 0,
         currentBalance: student?.walletBalance || 0,
       });
     } catch (err) {
@@ -198,19 +204,94 @@ export default function Ledger() {
 
       {/* Apply Penalty */}
       <h3 className="font-serif font-bold text-xl mb-3">Apply Penalty</h3>
-      <BrutalCard className="p-5 max-w-md mb-8">
+      <BrutalCard className="p-5 max-w-md mb-5">
         <div className="flex flex-col gap-3">
-          <input value={penaltyUid} onChange={e => setPenaltyUid(e.target.value)}
-            placeholder="Student Roll No" className="border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none" />
-          <input value={penaltyAmt} onChange={e => setPenaltyAmt(e.target.value)}
-            placeholder="Penalty amount (₹)" type="number"
+          <input value={penaltyUid} onChange={e => { setPenaltyUid(e.target.value); setPenaltyError(''); }}
+            placeholder="Student Roll No (e.g. 25105157XXX)"
             className="border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none" />
-          <BrutalButton variant="danger" icon={AlertTriangle} fullWidth
-            onClick={() => { setPenaltyUid(''); setPenaltyAmt(''); }}>
-            Apply Penalty
+          <input value={penaltyAmt} onChange={e => { setPenaltyAmt(e.target.value); setPenaltyError(''); }}
+            placeholder="Penalty amount (₹)" type="number" min="1"
+            className="border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none" />
+          <input value={penaltyReason} onChange={e => { setPenaltyReason(e.target.value); setPenaltyError(''); }}
+            placeholder="Reason (e.g. Eating during opt-out period)"
+            className="border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none" />
+          {penaltyError && (
+            <p className="font-sans text-xs text-red-600 font-semibold">{penaltyError}</p>
+          )}
+          <BrutalButton variant="danger" icon={AlertTriangle} fullWidth disabled={penaltyBusy}
+            onClick={async () => {
+              const amt = Number(penaltyAmt);
+              if (!penaltyUid.trim()) { setPenaltyError('Enter the student roll number.'); return; }
+              if (!amt || amt <= 0) { setPenaltyError('Enter a valid amount.'); return; }
+              if (!penaltyReason.trim()) { setPenaltyError('Enter a reason for the penalty.'); return; }
+              setPenaltyBusy(true);
+              setPenaltyError('');
+              try {
+                // Find student by roll number
+                const { getAllStudents } = await import('../../lib/firestoreService');
+                const all = await getAllStudents();
+                const student = all.find(s => s.rollNumber?.toLowerCase() === penaltyUid.trim().toLowerCase());
+                if (!student) { setPenaltyError('Student not found with that roll number.'); return; }
+                await applyPenalty(student.uid, {
+                  amount: amt,
+                  reason: penaltyReason.trim(),
+                  appliedBy: user?.displayName || user?.rollNumber || 'Committee',
+                });
+                setPenaltyUid(''); setPenaltyAmt(''); setPenaltyReason('');
+              } catch (err) {
+                setPenaltyError(err.message || 'Failed to apply penalty.');
+              } finally {
+                setPenaltyBusy(false);
+              }
+            }}
+          >
+            {penaltyBusy ? 'Applying…' : 'Apply Penalty'}
           </BrutalButton>
         </div>
       </BrutalCard>
+
+      {/* Penalty History */}
+      <h3 className="font-serif font-bold text-xl mb-3">Penalty History</h3>
+      <div className="flex flex-col gap-2 max-w-3xl mb-10">
+        {penalties.length === 0 ? (
+          <BrutalCard className="p-5 text-center">
+            <p className="font-sans text-sm text-brand-light">No penalties applied yet.</p>
+          </BrutalCard>
+        ) : (
+          penalties.map((p, i) => (
+            <motion.div
+              key={p.id}
+              initial={{ opacity: 0, x: -10 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{ delay: i * 0.03 }}
+            >
+              <BrutalCard color="bg-brand-secondary" className="p-4">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-full bg-white border-2 border-brand-dark flex items-center justify-center font-serif font-bold text-sm shrink-0">
+                      {(p.studentName || '?')[0]}
+                    </div>
+                    <div>
+                      <p className="font-sans font-bold text-sm">{p.studentName}</p>
+                      <p className="font-mono text-xs text-brand-light">{p.rollNumber}</p>
+                      <p className="font-sans text-xs text-brand-dark/70 mt-0.5">{p.reason}</p>
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-serif font-bold text-lg text-brand-dark">−₹{p.amount}</p>
+                    <p className="font-sans text-[10px] text-brand-light">
+                      ₹{p.balanceBefore} → ₹{p.balanceAfter}
+                    </p>
+                    <p className="font-sans text-[10px] text-brand-light">
+                      By {p.appliedBy} · {p.appliedAt?.toDate ? new Date(p.appliedAt.toDate()).toLocaleDateString('en-IN') : 'Just now'}
+                    </p>
+                  </div>
+                </div>
+              </BrutalCard>
+            </motion.div>
+          ))
+        )}
+      </div>
 
       {/* Doc view modal */}
       {docView && <DocViewModal {...docView} onClose={() => setDocView(null)} />}

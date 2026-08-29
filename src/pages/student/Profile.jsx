@@ -1,26 +1,32 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { LogOut, Wallet, Clock, CheckCircle2, XCircle } from 'lucide-react';
+import { LogOut, Wallet, Clock, CheckCircle2, XCircle, ArrowLeftRight } from 'lucide-react';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
 import { listenMyOptOuts } from '../../lib/firestoreService';
-import { format } from 'date-fns';
 import { QRCodeSVG } from 'qrcode.react';
+import { useNavigate } from 'react-router-dom';
 
 /* ─────────────────────────────────────────────────────────
    Student — Profile (Phase 2: live wallet + opt-out history)
+   Committee/Admin members also see a panel-switch button.
 ───────────────────────────────────────────────────────── */
 
 const STATUS_CONF = {
-  pending:  { label: 'Pending',  color: 'bg-brand-purple',   Icon: Clock         },
-  approved: { label: 'Approved', color: 'bg-brand-accent',   Icon: CheckCircle2  },
-  rejected: { label: 'Rejected', color: 'bg-brand-secondary', Icon: XCircle       },
+  pending:  { label: 'Pending',  color: 'bg-brand-purple',    Icon: Clock        },
+  approved: { label: 'Approved', color: 'bg-brand-accent',    Icon: CheckCircle2 },
+  rejected: { label: 'Rejected', color: 'bg-brand-secondary', Icon: XCircle      },
 };
 
 export default function Profile({ direction }) {
   const { user, logout, refreshProfile } = useAuth();
+  const navigate = useNavigate();
   const [history, setHistory] = useState([]);
+
+  const isStaff    = user?.role === 'committee'; // admin accounts are separate — no switch needed
+  const panelPath  = '/committee';
+  const panelLabel = 'Committee Panel';
 
   useEffect(() => {
     if (!user?.uid) return;
@@ -37,18 +43,16 @@ export default function Profile({ direction }) {
 
   return (
     <AnimatedPage direction={direction} className="px-5 pt-5 pb-6">
+
       {/* Profile card */}
       <motion.div
         initial={{ opacity: 0, y: -16 }}
         animate={{ opacity: 1, y: 0 }}
-        className="bg-brand-primary border-2 border-brand-dark rounded-brutal p-5 shadow-brutal mb-5 relative overflow-hidden"
+        className="bg-brand-primary border-2 border-brand-dark rounded-brutal p-5 shadow-brutal mb-4 relative overflow-hidden"
       >
-        {/* BG watermark */}
         <span className="absolute -bottom-4 -right-4 font-serif font-bold text-brand-dark/10 select-none pointer-events-none"
           style={{ fontSize: '5rem' }}>🎓</span>
-
         <div className="flex items-center gap-4 relative z-10">
-          {/* Avatar */}
           <div className="w-16 h-16 rounded-full bg-white border-2 border-brand-dark flex items-center justify-center font-serif font-bold text-3xl shadow-brutal-sm shrink-0">
             {user?.displayName?.[0] ?? 'S'}
           </div>
@@ -61,6 +65,28 @@ export default function Profile({ direction }) {
           </div>
         </div>
       </motion.div>
+
+      {/* Panel switch — committee/admin only */}
+      {isStaff && (
+        <motion.button
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={() => { window.location.href = panelPath; }}
+          className="w-full mb-5 flex items-center justify-between gap-3 bg-brand-dark text-brand-bg border-2 border-brand-dark rounded-brutal px-5 py-3.5 shadow-brutal-sm hover:shadow-brutal transition-shadow"
+        >
+          <div className="flex items-center gap-3">
+            <ArrowLeftRight size={18} className="shrink-0" />
+            <div className="text-left">
+              <p className="font-sans font-bold text-sm">Switch to {panelLabel}</p>
+              <p className="font-sans text-xs text-brand-bg/60">You have staff access</p>
+            </div>
+          </div>
+          <span className="font-sans text-xs bg-brand-gold text-brand-dark px-2 py-0.5 rounded-pill font-bold capitalize">
+            {user.role.replace('_', ' ')}
+          </span>
+        </motion.button>
+      )}
 
       {/* Wallet + Stats */}
       <div className="grid grid-cols-2 gap-3 mb-5">

@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Html5Qrcode } from 'html5-qrcode';
-import { CheckCircle, XCircle, LogOut } from 'lucide-react';
+import jsQR from 'jsqr';
+import { CheckCircle, XCircle, LogOut, CameraOff } from 'lucide-react';
 import { BrutalCard, BrutalButton } from '../../components/ui';
 import { getTodayBlocklist } from '../../lib/firestoreService';
 import { useAuth } from '../../context/AuthContext';
@@ -9,23 +9,28 @@ import { getTodayToken, ANIM_COMPONENT_MAP } from '../../utils/tokenUtils';
 
 /* ─────────────────────────────────────────────────────────
    Worker — QR Terminal
-   • Token displayed as a proper card (matches student view)
-   • Big QR scanner graphic on idle
-   • Logout button in header
+   Uses native getUserMedia + jsQR for reliable scanning.
+   Camera is fully released (all tracks stopped) on cancel/close.
 ───────────────────────────────────────────────────────── */
 
 export default function Terminal() {
-  const { user, logout }        = useAuth();
-  const [scanning, setScanning] = useState(false);
-  const [result,   setResult]   = useState(null);
-  const [blocklist, setBlocklist] = useState(null);
+  const { user, logout } = useAuth();
+  const [scanning,    setScanning]    = useState(false);
+  const [result,      setResult]      = useState(null);
+  const [camError,    setCamError]    = useState('');
+  const [blocklist,   setBlocklist]   = useState(null);
   const [loadingList, setLoadingList] = useState(true);
-  const scannerRef = useRef(null);
-  const html5QrRef = useRef(null);
+
+  const videoRef   = useRef(null);
+  const canvasRef  = useRef(null);
+  const streamRef  = useRef(null);   // MediaStream — so we can stop it
+  const rafRef     = useRef(null);   // requestAnimationFrame id
+  const activeRef  = useRef(false);  // guard against stale closures
 
   const { asset, animationType } = getTodayToken();
   const AnimComp = ANIM_COMPONENT_MAP[animationType] ?? ANIM_COMPONENT_MAP['marquee-rtl'];
 
+  /* ── Load blocklist ─────────────────────────────────── */
   useEffect(() => {
     const fetchList = async () => {
       try {
@@ -42,31 +47,103 @@ export default function Terminal() {
     fetchList();
   }, []);
 
-  const startScanner = () => {
-    if (!scannerRef.current) return;
-    const qr = new Html5Qrcode(scannerRef.current.id);
-    html5QrRef.current = qr;
-    qr.start(
-      { facingMode: 'environment' },
-      { fps: 10, qrbox: { width: 240, height: 240 } },
-      (decodedText) => onScan(decodedText),
-      () => {}
-    ).then(() => setScanning(true)).catch(err => console.warn(err));
-  };
+  /* ── Cleanup on unmount ─────────────────────────────── */
+  useEffect(() => {
+    return () => stopCamera();
+  }, []);
 
-  const stopScanner = () => {
-    html5QrRef.current?.stop().catch(() => {});
-    html5QrRef.current = null;
+  /* ── Stop camera & release all resources ────────────── */
+  const stopCamera = useCallback(() => {
+    activeRef.current = false;
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
     setScanning(false);
-  };
+  }, []);
 
-  const onScan = (uid) => {
-    stopScanner();
-    if (!blocklist) { setResult({ allowed: false, uid, reason: 'Blocklist not loaded' }); return; }
-    const allowed = !blocklist.includes(uid);
-    setResult({ allowed, uid });
-    setTimeout(() => setResult(null), 6000);
-  };
+  /* ── Start camera via getUserMedia ──────────────────── */
+  const startCamera = useCallback(async () => {
+    setCamError('');
+    setResult(null);
+
+    // getUserMedia requires a secure context (HTTPS or localhost)
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCamError(
+        'Camera not available. This app must be accessed over HTTPS — ask your admin to check the connection.'
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      activeRef.current = true;
+
+      const video = videoRef.current;
+      video.srcObject = stream;
+      await video.play();
+
+      setScanning(true);
+      scanLoop();
+    } catch (err) {
+      console.error('Camera error:', err);
+      if (err.name === 'NotAllowedError') {
+        setCamError('Camera permission denied. Please allow camera access and try again.');
+      } else if (err.name === 'NotFoundError') {
+        setCamError('No camera found on this device.');
+      } else {
+        setCamError(`Camera error: ${err.message}`);
+      }
+    }
+  }, []); // eslint-disable-line
+
+  /* ── Frame-by-frame QR scan loop ───────────────────── */
+  const scanLoop = useCallback(() => {
+    if (!activeRef.current) return;
+
+    const video  = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || video.readyState < 2) {
+      rafRef.current = requestAnimationFrame(scanLoop);
+      return;
+    }
+
+    const ctx = canvas.getContext('2d');
+    canvas.width  = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const code = jsQR(imageData.data, imageData.width, imageData.height, {
+      inversionAttempts: 'dontInvert',
+    });
+
+    if (code?.data) {
+      onScan(code.data);
+      return;
+    }
+
+    rafRef.current = requestAnimationFrame(scanLoop);
+  }, []); // eslint-disable-line
+
+  /* ── Handle a successful scan ───────────────────────── */
+  const onScan = useCallback((uid) => {
+    stopCamera();
+    const allowed = blocklist ? !blocklist.includes(uid) : false;
+    const reason  = !blocklist ? 'Blocklist not loaded — offline mode' : undefined;
+    setResult({ allowed, uid, reason });
+    setTimeout(() => setResult(null), 7000);
+  }, [blocklist, stopCamera]);
 
   return (
     <div className="min-h-screen bg-brand-bg flex flex-col">
@@ -91,57 +168,38 @@ export default function Terminal() {
         </button>
       </div>
 
-      {/* ── Today's token — proper card ── */}
+      {/* ── Today's token card ── */}
       <div className="px-5 py-5 flex justify-center">
         <motion.div
           initial={{ opacity: 0, y: -12, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ type: 'spring', stiffness: 300, damping: 24 }}
-          className={`
-            relative w-full max-w-[340px] rounded-[24px] border-2 border-brand-dark shadow-brutal
-            flex flex-col items-center pt-5 pb-4 px-4 ${asset.bg}
-          `}
+          className={`relative w-full max-w-[340px] rounded-[24px] border-2 border-brand-dark shadow-brutal flex flex-col items-center pt-5 pb-4 px-4 ${asset.bg}`}
           style={{ userSelect: 'none' }}
         >
-          {/* Watermark */}
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden select-none rounded-[22px]">
-            <span className="font-serif font-bold text-brand-dark/[0.07]" style={{ fontSize: 'clamp(2rem,18vw,5rem)', whiteSpace:'nowrap' }}>
+            <span className="font-serif font-bold text-brand-dark/[0.07]" style={{ fontSize: 'clamp(2rem,18vw,5rem)', whiteSpace: 'nowrap' }}>
               GEC MESS
             </span>
           </div>
-
-          {/* Label */}
-          <p className="font-sans font-semibold text-[10px] uppercase tracking-[0.2em] text-brand-dark/50 mb-1 z-10">
-            Today's Pass Token
-          </p>
+          <p className="font-sans font-semibold text-[10px] uppercase tracking-[0.2em] text-brand-dark/50 mb-1 z-10">Today's Pass Token</p>
           <p className="font-sans text-[10px] text-brand-dark/40 mb-2 z-10">
             {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long' })}
           </p>
-
-          {/* Animation zone */}
-          <div
-            className="z-10 w-full"
-            style={{ overflowX: 'hidden', overflowY: 'visible', minHeight: 110, paddingTop: 8, paddingBottom: 8 }}
-          >
+          <div className="z-10 w-full" style={{ overflowX: 'hidden', overflowY: 'visible', minHeight: 110, paddingTop: 8, paddingBottom: 8 }}>
             <AnimComp emoji={asset.emoji} size="text-5xl" />
           </div>
-
-          {/* Dashed divider */}
           <div className="w-full border-t-2 border-dashed border-brand-dark/20 my-2 z-10" />
-
-          {/* Footer strip */}
           <div className="z-10 flex items-center justify-between w-full px-1 pt-1">
             <p className="font-sans text-[10px] text-brand-dark/50">GEC Sheikhpura Mess</p>
             <p className="font-mono text-[10px] font-bold text-brand-dark/60">
-              {blocklist !== null
-                ? `${blocklist.length} opted out`
-                : loadingList ? 'syncing...' : 'offline'}
+              {blocklist !== null ? `${blocklist.length} opted out` : loadingList ? 'syncing...' : 'offline'}
             </p>
           </div>
         </motion.div>
       </div>
 
-      {/* ── Scan result ── */}
+      {/* ── Scan result banner ── */}
       <AnimatePresence>
         {result && (
           <motion.div
@@ -158,7 +216,7 @@ export default function Terminal() {
                 {result.allowed ? '✓ Entry Allowed' : '✗ Opted Out'}
               </p>
               <p className="font-sans text-xs text-brand-dark/70 mt-0.5">
-                {result.allowed ? 'Student may enter the mess.' : 'Deny entry — student has opted out today.'}
+                {result.reason ?? (result.allowed ? 'Student may enter the mess.' : 'Deny entry — student has opted out today.')}
               </p>
               <p className="font-mono text-[10px] text-brand-dark/50 mt-1 truncate max-w-[220px]">{result.uid}</p>
             </div>
@@ -166,40 +224,64 @@ export default function Terminal() {
         )}
       </AnimatePresence>
 
+      {/* ── Camera error ── */}
+      {camError && (
+        <div className="mx-5 mb-3 flex items-center gap-3 border-2 border-brand-dark rounded-brutal p-4 bg-brand-secondary">
+          <CameraOff size={20} className="shrink-0 text-brand-dark" />
+          <p className="font-sans text-sm text-brand-dark">{camError}</p>
+        </div>
+      )}
+
       {/* ── Scanner area ── */}
       <div className="flex-1 flex flex-col items-center justify-center px-5 pb-8">
 
-        {/* Hidden scanner div (shown when active) */}
-        <div
-          id="qr-scanner-container"
-          ref={scannerRef}
-          className={`w-full max-w-sm aspect-square border-2 border-brand-dark rounded-brutal overflow-hidden bg-brand-dark mb-4 ${scanning ? 'block' : 'hidden'}`}
-        />
+        {/* Live video feed — always in DOM, shown/hidden via CSS */}
+        <div className={`relative w-full max-w-sm mb-4 ${scanning ? 'block' : 'hidden'}`}>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full aspect-square object-cover rounded-brutal border-2 border-brand-dark bg-brand-dark"
+          />
+          {/* Corner overlays */}
+          {[['top-2 left-2', 'border-t-4 border-l-4'],
+            ['top-2 right-2', 'border-t-4 border-r-4'],
+            ['bottom-2 left-2', 'border-b-4 border-l-4'],
+            ['bottom-2 right-2', 'border-b-4 border-r-4']].map(([pos, bdr], i) => (
+            <div key={i} className={`absolute ${pos} w-8 h-8 ${bdr} border-brand-gold rounded-sm`} />
+          ))}
+          {/* Scan line */}
+          <motion.div
+            className="absolute left-3 right-3 h-0.5 bg-brand-gold/70 rounded"
+            animate={{ top: ['8%', '92%', '8%'] }}
+            transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
+          />
+        </div>
 
-        {/* Idle state — big scanner illustration */}
+        {/* Hidden canvas for jsQR pixel extraction */}
+        <canvas ref={canvasRef} className="hidden" />
+
+        {/* Idle state */}
         {!scanning && !result && (
           <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             className="flex flex-col items-center"
           >
-            {/* Scanner SVG illustration */}
             <div className="relative mb-6">
               <div className="w-48 h-48 border-2 border-brand-dark/20 rounded-brutal bg-brand-bg flex items-center justify-center relative overflow-hidden">
-                {/* Scan line animation */}
                 <motion.div
-                  className="absolute left-0 right-0 h-0.5 bg-brand-dark/40"
+                  className="absolute left-0 right-0 h-0.5 bg-brand-dark/30"
                   animate={{ top: ['10%', '90%', '10%'] }}
                   transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }}
                 />
-                {/* QR corner marks */}
-                {[['top-2 left-2','border-t-2 border-l-2'],
-                  ['top-2 right-2','border-t-2 border-r-2'],
-                  ['bottom-2 left-2','border-b-2 border-l-2'],
-                  ['bottom-2 right-2','border-b-2 border-r-2']].map(([pos, bdr], i) => (
+                {[['top-2 left-2', 'border-t-2 border-l-2'],
+                  ['top-2 right-2', 'border-t-2 border-r-2'],
+                  ['bottom-2 left-2', 'border-b-2 border-l-2'],
+                  ['bottom-2 right-2', 'border-b-2 border-r-2']].map(([pos, bdr], i) => (
                   <div key={i} className={`absolute ${pos} w-7 h-7 ${bdr} border-brand-dark rounded-sm`} />
                 ))}
-                {/* Center QR icon */}
                 <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-brand-dark/30">
                   <rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/>
                   <rect x="3" y="14" width="7" height="7" rx="1"/>
@@ -210,54 +292,42 @@ export default function Terminal() {
                 </svg>
               </div>
             </div>
-
             <p className="font-serif font-bold text-xl text-brand-dark mb-1">
               {loadingList ? 'Getting ready...' : 'Ready to Scan'}
             </p>
             <p className="font-sans text-sm text-brand-light text-center mb-6 max-w-[220px]">
-              {loadingList
-                ? 'Fetching today\'s opt-out list...'
-                : `${blocklist?.length ?? 0} students opted out today`}
+              {loadingList ? "Fetching today's opt-out list..." : `${blocklist?.length ?? 0} students opted out today`}
             </p>
-
-            <BrutalButton
-              onClick={startScanner}
-              disabled={loadingList}
-              size="lg"
-              className="px-10"
-            >
+            <BrutalButton onClick={startCamera} disabled={loadingList} size="lg" className="px-10">
               {loadingList ? '⏳ Loading...' : '📷 Start Scanning'}
             </BrutalButton>
           </motion.div>
         )}
 
-        {/* Scanning state */}
+        {/* Active scanning controls */}
         {scanning && (
-          <div className="text-center mt-4 w-full max-w-sm">
+          <div className="text-center mt-3 w-full max-w-sm">
             <motion.p
               animate={{ opacity: [1, 0.4, 1] }}
               transition={{ duration: 1.2, repeat: Infinity }}
               className="font-sans text-sm text-brand-light mb-4"
             >
-              Point camera at student's QR code...
+              Point camera at student's QR code…
             </motion.p>
-            <BrutalButton variant="ghost" onClick={stopScanner} fullWidth>
-              Cancel
+            <BrutalButton variant="ghost" onClick={stopCamera} fullWidth>
+              ✕ Cancel
             </BrutalButton>
           </div>
         )}
 
-        {/* Post-scan — scan next */}
+        {/* Post-scan: scan next */}
         {result && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="mt-4 w-full max-w-sm"
           >
-            <BrutalButton
-              onClick={() => { setResult(null); startScanner(); }}
-              fullWidth size="lg"
-            >
+            <BrutalButton onClick={startCamera} fullWidth size="lg">
               📷 Scan Next Student
             </BrutalButton>
           </motion.div>

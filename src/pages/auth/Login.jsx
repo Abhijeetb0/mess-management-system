@@ -12,17 +12,17 @@ import { BrutalButton } from '../../components/ui';
 ───────────────────────────────────────────────────────── */
 
 export default function Login() {
-  const { loginWithGoogle, login, completeGoogleRegistration, pendingGoogle } = useAuth();
+  const { loginWithGoogle, login, completeGoogleRegistration, pendingGoogle, kickedOut } = useAuth();
 
-  const [step,     setStep]     = useState('main');   // 'main' | 'id-login' | 'complete-registration'
-  const [roll,     setRoll]     = useState('');
-  const [pass,     setPass]     = useState('');
-  const [showPass,    setShowPass]    = useState(false);
-  const [regRoll,     setRegRoll]     = useState('');
-  const [regPass,     setRegPass]     = useState('');
+  const [step, setStep] = useState('main');   // 'main' | 'id-login' | 'complete-registration'
+  const [roll, setRoll] = useState('');
+  const [pass, setPass] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [regRoll, setRegRoll] = useState('');
+  const [regPass, setRegPass] = useState('');
   const [showRegPass, setShowRegPass] = useState(false);
-  const [error,       setError]       = useState('');
-  const [loading,  setLoading]  = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   // When AuthContext signals a new Google user needs registration → switch step
   useEffect(() => {
@@ -43,12 +43,12 @@ export default function Login() {
       // If new user, AuthContext sets pendingGoogle → useEffect above switches step
     } catch (err) {
       const messages = {
-        'auth/popup-closed-by-user':  'Sign-in cancelled.',
-        'auth/popup-blocked':         'Popup blocked — please allow popups for this site.',
+        'auth/popup-closed-by-user': 'Sign-in cancelled.',
+        'auth/popup-blocked': 'Popup blocked — please allow popups for this site.',
         'auth/cancelled-popup-request': 'Sign-in cancelled.',
         'auth/network-request-failed': 'Network error. Check your connection.',
         'auth/operation-not-allowed': 'Google sign-in is not enabled. Contact the administrator.',
-        'auth/unauthorized-domain':   'This domain is not authorized. Add it in Firebase Console → Authentication → Settings → Authorized domains.',
+        'auth/unauthorized-domain': 'This domain is not authorized. Add it in Firebase Console → Authentication → Settings → Authorized domains.',
       };
       setError(messages[err.code] || `Sign-in error: ${err.code ?? err.message}`);
     } finally {
@@ -62,7 +62,7 @@ export default function Login() {
     if (!regRoll.trim()) { setError('Please enter your registration number.'); return; }
     if (!regPass.trim()) { setError('Please set a password for ID login.'); return; }
     if (regPass.length < 6) { setError('Password must be at least 6 characters.'); return; }
-    
+
     setError('');
     setLoading(true);
     try {
@@ -80,21 +80,21 @@ export default function Login() {
   const handleIdLogin = async (e) => {
     e.preventDefault();
     if (!roll.trim()) { setError('Enter your registration number.'); return; }
-    if (!pass)        { setError('Enter your password.'); return; }
+    if (!pass) { setError('Enter your password.'); return; }
     setError('');
     setLoading(true);
     try {
       await login(roll.trim(), pass);
     } catch (err) {
       const messages = {
-        'auth/user-not-found':      'No account found. Sign in with Google first.',
-        'auth/wrong-password':      'Wrong password.',
-        'auth/invalid-credential':  'Invalid registration number or password.',
-        'auth/invalid-email':       'Invalid registration number format.',
-        'auth/too-many-requests':   'Too many attempts. Please wait.',
+        'auth/user-not-found': 'No account found. Sign in with Google first.',
+        'auth/wrong-password': 'Wrong password.',
+        'auth/invalid-credential': 'Invalid registration number or password.',
+        'auth/invalid-email': 'Invalid registration number format.',
+        'auth/too-many-requests': 'Too many attempts. Please wait.',
         'auth/network-request-failed': 'Network error. Check your connection.',
         // Google-only accounts can't use email/password
-        'auth/user-disabled':       'This account has been disabled.',
+        'auth/user-disabled': 'This account has been disabled.',
       };
       setError(messages[err.code] || `Login error: ${err.code ?? err.message}`);
     } finally {
@@ -104,6 +104,28 @@ export default function Login() {
 
   return (
     <div className="min-h-screen bg-brand-bg flex flex-col items-center justify-center px-5 py-10">
+
+      {/* Kicked-out banner */}
+      <AnimatePresence>
+        {kickedOut && (
+          <motion.div
+            initial={{ opacity: 0, y: -16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0 }}
+            className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-sm mx-auto"
+          >
+            <div className="bg-brand-secondary border-2 border-brand-dark rounded-brutal shadow-brutal px-4 py-3 flex items-start gap-3">
+              <span className="text-xl shrink-0">⚠️</span>
+              <div>
+                <p className="font-sans font-bold text-sm text-brand-dark">Signed out from this device</p>
+                <p className="font-sans text-xs text-brand-dark/70 mt-0.5">
+                  Your account was signed in on another device. Each account can only be active on one device at a time.
+                </p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Logo */}
       <motion.div
@@ -158,7 +180,7 @@ export default function Login() {
                   <input
                     value={regRoll}
                     onChange={e => setRegRoll(e.target.value.toUpperCase())}
-                    placeholder="e.g. 23CS001"
+                    placeholder="e.g. 25105157XXX"
                     autoFocus
                     className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-mono text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
                   />
@@ -208,10 +230,10 @@ export default function Login() {
                 className="w-full flex items-center justify-center gap-3 border-2 border-brand-dark rounded-brutal px-4 py-3.5 bg-white hover:bg-brand-primary/20 shadow-brutal-sm hover:shadow-brutal transition-all font-sans font-semibold text-sm text-brand-dark disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <svg width="20" height="20" viewBox="0 0 24 24">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
                 </svg>
                 {loading ? 'Opening Google…' : 'Continue with Google'}
               </motion.button>
@@ -261,7 +283,7 @@ export default function Login() {
                     id="input-roll"
                     value={roll}
                     onChange={e => setRoll(e.target.value.toUpperCase())}
-                    placeholder="e.g. 23CS001"
+                    placeholder="e.g. 25105157XXX"
                     autoFocus
                     className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-mono text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
                   />
@@ -276,7 +298,7 @@ export default function Login() {
                       type={showPass ? 'text' : 'password'}
                       value={pass}
                       onChange={e => setPass(e.target.value)}
-                      placeholder="Your mess portal password"
+                      placeholder="Your password"
                       className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 pr-10 font-sans text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
                     />
                     <button type="button" tabIndex={-1}

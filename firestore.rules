@@ -23,6 +23,8 @@ service cloud.firestore {
       // Students can update only non-role fields
       allow update: if isAuth() && uid() == userId
         && !('role' in request.resource.data.diff(resource.data).affectedKeys());
+      // Committee can update isApproved field (student approval)
+      allow update: if isCommittee();
       // Only super admin can update role
       allow update: if isAdmin();
       allow delete: if isAdmin();
@@ -77,15 +79,21 @@ service cloud.firestore {
 
     // ── /feedback/{msgId} ────────────────────────────────
     match /feedback/{msgId} {
-      // All authenticated users can read chat messages
       allow read: if isAuth();
-      // Any authenticated user can create a message
       allow create: if isAuth()
         && request.resource.data.uid == uid();
-      // Anyone can update reactions / poll votes (partial updates only)
       allow update: if isAuth();
-      // Only committee/admin can delete messages
       allow delete: if isCommittee();
+    }
+
+    // ── /penalties/{id} ────────────────────────────────
+    match /penalties/{id} {
+      // Committee and admin can read all penalties
+      allow read: if isCommittee();
+      // Committee can create penalties
+      allow create: if isCommittee();
+      // Only admin can delete penalty records
+      allow delete: if isAdmin();
     }
   }
 }

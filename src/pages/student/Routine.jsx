@@ -11,21 +11,24 @@ import { listenTodayMenu, listenAnnouncements } from '../../lib/firestoreService
 ───────────────────────────────────────────────────────── */
 
 const FALLBACK_MEALS = [
-  { id: 'breakfast', type: 'Breakfast', timing: '8:00 – 9:30 AM',  emoji: '☀️', color: 'bg-brand-primary',   items: ['Aloo Paratha', 'Curd', 'Chai'] },
+  { id: 'breakfast', type: 'Breakfast', timing: '8:00 – 9:30 AM',  emoji: '☀️',  color: 'bg-brand-primary',   items: ['Aloo Paratha', 'Curd', 'Chai'] },
   { id: 'lunch',     type: 'Lunch',     timing: '1:00 – 2:30 PM',  emoji: '🌤️', color: 'bg-brand-secondary', items: ['Rajma Chawal', 'Roti', 'Lassi'] },
-  { id: 'dinner',    type: 'Dinner',    timing: '8:00 – 9:30 PM',  emoji: '🌙', color: 'bg-brand-accent',    items: ['Dal Tadka', 'Roti', 'Rice'] },
+  { id: 'snacks',    type: 'Snacks',    timing: '6:00 – 7:00 PM',  emoji: '🫖',  color: 'bg-brand-purple',    items: ['Samosa', 'Chai'] },
+  { id: 'dinner',    type: 'Dinner',    timing: '8:00 – 9:30 PM',  emoji: '🌙',  color: 'bg-brand-accent',    items: ['Dal Tadka', 'Roti', 'Rice'] },
 ];
 const MEAL_META = {
-  breakfast: { emoji: '☀️', color: 'bg-brand-primary',   timing: '8:00 – 9:30 AM'  },
-  lunch:     { emoji: '🌤️', color: 'bg-brand-secondary', timing: '1:00 – 2:30 PM'  },
-  dinner:    { emoji: '🌙', color: 'bg-brand-accent',    timing: '8:00 – 9:30 PM'  },
+  breakfast: { emoji: '☀️',  color: 'bg-brand-primary',   timing: '8:00 – 9:30 AM' },
+  lunch:     { emoji: '🌤️', color: 'bg-brand-secondary', timing: '1:00 – 2:30 PM' },
+  snacks:    { emoji: '🫖',  color: 'bg-brand-purple',    timing: '6:00 – 7:00 PM' },
+  dinner:    { emoji: '🌙',  color: 'bg-brand-accent',    timing: '8:00 – 9:30 PM' },
 };
 
 function getMealStatus(mealId) {
   const h = new Date().getHours();
-  if (mealId === 'breakfast') return h < 8 ? 'upcoming' : h < 10 ? 'serving' : 'done';
+  if (mealId === 'breakfast') return h < 8  ? 'upcoming' : h < 10 ? 'serving' : 'done';
   if (mealId === 'lunch')     return h < 13 ? 'upcoming' : h < 15 ? 'serving' : 'done';
-  return h < 20 ? 'upcoming' : h < 22 ? 'serving' : 'done';
+  if (mealId === 'snacks')    return h < 18 ? 'upcoming' : h < 19 ? 'serving' : 'done';
+  return h < 20 ? 'upcoming' : h < 22 ? 'serving' : 'done'; // dinner
 }
 const STATUS_BADGE = {
   upcoming: { label: 'Upcoming',  color: 'bg-brand-purple' },
@@ -43,7 +46,7 @@ export default function Routine({ direction }) {
   useEffect(() => {
     const unsub = listenTodayMenu((data) => {
       if (!data) return;
-      const parsed = ['breakfast', 'lunch', 'dinner'].map(id => ({
+      const parsed = ['breakfast', 'lunch', 'snacks', 'dinner'].map(id => ({
         id,
         type:  id.charAt(0).toUpperCase() + id.slice(1),
         items: data[id]?.items || [],

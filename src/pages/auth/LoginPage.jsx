@@ -11,10 +11,10 @@ import { BrutalButton } from '../../components/ui';
 export default function LoginPage() {
   const { login } = useAuth();
   const [rollNumber, setRollNumber] = useState('');
-  const [password, setPassword]     = useState('');
-  const [showPass, setShowPass]     = useState(false);
-  const [error, setError]           = useState('');
-  const [loading, setLoading]       = useState(false);
+  const [password, setPassword] = useState('');
+  const [showPass, setShowPass] = useState(false);
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -82,7 +82,7 @@ export default function LoginPage() {
                 type="text"
                 value={rollNumber}
                 onChange={e => setRollNumber(e.target.value)}
-                placeholder="e.g. 23CS001"
+                placeholder="e.g. 25105157XXX"
                 className="flex-1 bg-transparent font-sans text-sm text-brand-dark placeholder:text-brand-light/60 outline-none uppercase"
                 autoComplete="username"
               />

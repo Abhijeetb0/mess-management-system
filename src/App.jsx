@@ -29,6 +29,7 @@ const CommitteeMenu      = lazy(() => import('./pages/committee/MenuManager'));
 const CommitteeAnnounce  = lazy(() => import('./pages/committee/Announce'));
 const CommitteeLedger    = lazy(() => import('./pages/committee/Ledger'));
 const CommitteeUsers     = lazy(() => import('./pages/committee/Users'));
+const CommitteeStudents  = lazy(() => import('./pages/committee/Students'));
 
 // Worker
 const WorkerTerminal = lazy(() => import('./pages/worker/Terminal'));
@@ -124,7 +125,7 @@ function CommitteeLayout() {
   return (
     <div className="flex min-h-dvh">
       <SideNav variant="committee" />
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto pt-14 lg:pt-0">
         <AnimatePresence mode="wait">
           <Suspense fallback={<FullPageLoader />}>
             <Routes location={location} key={location.pathname}>
@@ -133,6 +134,7 @@ function CommitteeLayout() {
               <Route path="announce"  element={<CommitteeAnnounce />} />
               <Route path="ledger"    element={<CommitteeLedger />} />
               <Route path="users"     element={<CommitteeUsers />} />
+              <Route path="students"  element={<CommitteeStudents />} />
               <Route path="feedback"  element={<StudentFeedback direction={1} />} />
               <Route index element={<Navigate to="dashboard" replace />} />
             </Routes>
@@ -149,7 +151,7 @@ function AdminLayout() {
   return (
     <div className="flex min-h-dvh">
       <SideNav variant="admin" />
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto pt-14 lg:pt-0">
         <AnimatePresence mode="wait">
           <Suspense fallback={<FullPageLoader />}>
             <Routes location={location} key={location.pathname}>
@@ -157,6 +159,7 @@ function AdminLayout() {
               <Route path="committee"  element={<AdminCommittee />} />
               <Route path="workers"    element={<AdminWorkers />} />
               <Route path="succession" element={<AdminSuccession />} />
+              <Route path="students"   element={<CommitteeStudents />} />
               <Route path="feedback"   element={<StudentFeedback direction={1} />} />
               <Route index element={<Navigate to="dashboard" replace />} />
             </Routes>
@@ -180,9 +183,9 @@ function AppRoutes() {
         user ? <Navigate to={roleHome(user.role)} replace /> : <Suspense fallback={<FullPageLoader />}><LoginPage /></Suspense>
       } />
 
-      {/* Student Panel */}
+      {/* Student Panel — committee can visit too (Student View button) */}
       <Route path="/student/*" element={
-        <ProtectedRoute allowedRoles={['student']}>
+        <ProtectedRoute allowedRoles={['student', 'committee']}>
           <StudentLayout />
         </ProtectedRoute>
       } />

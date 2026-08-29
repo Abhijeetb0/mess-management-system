@@ -174,8 +174,19 @@ export default function OptOut({ direction }) {
           </div>
         )}
 
-        {/* Form */}
-        {!pendingReq && (
+        {/* Not yet approved — block the form */}
+        {!user?.isApproved && (
+          <div className="mb-5 border-2 border-brand-dark rounded-brutal p-5 bg-brand-secondary/30 text-center">
+            <p className="text-2xl mb-2">⏳</p>
+            <p className="font-sans font-bold text-sm text-brand-dark">Account Pending Approval</p>
+            <p className="font-sans text-xs text-brand-light mt-1">
+              Your registration is awaiting committee approval. Once approved, you can submit opt-out requests.
+            </p>
+          </div>
+        )}
+
+        {/* Form — only shown when approved */}
+        {user?.isApproved && !pendingReq && (
           <form onSubmit={handleSubmit}>
             <BrutalCard className={`p-5 ${isLocked ? 'opacity-60 pointer-events-none' : ''}`}>
 
