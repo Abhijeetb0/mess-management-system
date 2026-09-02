@@ -226,6 +226,28 @@ export const listenPenalties = (callback) => {
   );
 };
 
+/** Mark a penalty as resolved (and refund the amount back to the student's wallet) */
+export const resolvePenalty = async (penaltyId, uid, amount) => {
+  const userSnap = await getDoc(doc(db, 'users', uid));
+  if (!userSnap.exists()) throw new Error('Student not found');
+  const current = userSnap.data().walletBalance || 0;
+  await Promise.all([
+    updateDoc(doc(db, 'users', uid), {
+      walletBalance: current + amount,
+      updatedAt: serverTimestamp(),
+    }),
+    updateDoc(doc(db, 'penalties', penaltyId), {
+      resolved: true,
+      resolvedAt: serverTimestamp(),
+    }),
+  ]);
+};
+
+/** Permanently remove a penalty record (no refund) */
+export const removePenalty = async (penaltyId) => {
+  await deleteDoc(doc(db, 'penalties', penaltyId));
+};
+
 /* ── Menu ───────────────────────────────────────────────── */
 
 /** Live listener for today's menu */

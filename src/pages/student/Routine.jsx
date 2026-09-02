@@ -6,41 +6,63 @@ import { BrutalCard, BrutalBadge } from '../../components/ui';
 import TokenOverlay from '../../components/TokenOverlay';
 import { listenTodayMenu, listenAnnouncements } from '../../lib/firestoreService';
 
-/* ─────────────────────────────────────────────────────────
-   Student — Today's Menu (Phase 2: live Firestore data)
-───────────────────────────────────────────────────────── */
+
 
 const FALLBACK_MEALS = [
-  { id: 'breakfast', type: 'Breakfast', timing: '8:00 – 9:30 AM',  emoji: '☀️',  color: 'bg-brand-primary',   items: ['Aloo Paratha', 'Curd', 'Chai'] },
-  { id: 'lunch',     type: 'Lunch',     timing: '1:00 – 2:30 PM',  emoji: '🌤️', color: 'bg-brand-secondary', items: ['Rajma Chawal', 'Roti', 'Lassi'] },
-  { id: 'snacks',    type: 'Snacks',    timing: '6:00 – 7:00 PM',  emoji: '🫖',  color: 'bg-brand-purple',    items: ['Samosa', 'Chai'] },
-  { id: 'dinner',    type: 'Dinner',    timing: '8:00 – 9:30 PM',  emoji: '🌙',  color: 'bg-brand-accent',    items: ['Dal Tadka', 'Roti', 'Rice'] },
+  { id: 'breakfast', type: 'Breakfast', timing: '8:00 – 9:30 AM', emoji: '☀️', color: 'bg-brand-primary', items: ['Aloo Paratha', 'Curd', 'Chai'] },
+  { id: 'lunch', type: 'Lunch', timing: '1:00 – 2:30 PM', emoji: '🌤️', color: 'bg-brand-secondary', items: ['Rajma Chawal', 'Roti', 'Lassi'] },
+  { id: 'snacks', type: 'Snacks', timing: '6:00 – 7:00 PM', emoji: '🫖', color: 'bg-brand-purple', items: ['Samosa', 'Chai'] },
+  { id: 'dinner', type: 'Dinner', timing: '8:00 – 9:30 PM', emoji: '🌙', color: 'bg-brand-accent', items: ['Dal Tadka', 'Roti', 'Rice'] },
 ];
 const MEAL_META = {
-  breakfast: { emoji: '☀️',  color: 'bg-brand-primary',   timing: '8:00 – 9:30 AM' },
-  lunch:     { emoji: '🌤️', color: 'bg-brand-secondary', timing: '1:00 – 2:30 PM' },
-  snacks:    { emoji: '🫖',  color: 'bg-brand-purple',    timing: '6:00 – 7:00 PM' },
-  dinner:    { emoji: '🌙',  color: 'bg-brand-accent',    timing: '8:00 – 9:30 PM' },
+  breakfast: { emoji: '☀️', color: 'bg-brand-primary', timing: '8:00 – 9:30 AM' },
+  lunch: { emoji: '🌤️', color: 'bg-brand-secondary', timing: '1:00 – 2:30 PM' },
+  snacks: { emoji: '🫖', color: 'bg-brand-purple', timing: '6:00 – 7:00 PM' },
+  dinner: { emoji: '🌙', color: 'bg-brand-accent', timing: '8:00 – 9:30 PM' },
 };
 
 function getMealStatus(mealId) {
   const h = new Date().getHours();
-  if (mealId === 'breakfast') return h < 8  ? 'upcoming' : h < 10 ? 'serving' : 'done';
-  if (mealId === 'lunch')     return h < 13 ? 'upcoming' : h < 15 ? 'serving' : 'done';
-  if (mealId === 'snacks')    return h < 18 ? 'upcoming' : h < 19 ? 'serving' : 'done';
+  if (mealId === 'breakfast') return h < 8 ? 'upcoming' : h < 10 ? 'serving' : 'done';
+  if (mealId === 'lunch') return h < 13 ? 'upcoming' : h < 15 ? 'serving' : 'done';
+  if (mealId === 'snacks') return h < 18 ? 'upcoming' : h < 19 ? 'serving' : 'done';
   return h < 20 ? 'upcoming' : h < 22 ? 'serving' : 'done'; // dinner
 }
 const STATUS_BADGE = {
-  upcoming: { label: 'Upcoming',  color: 'bg-brand-purple' },
-  serving:  { label: '🍽 Serving', color: 'bg-brand-accent' },
-  done:     { label: 'Closed',    color: 'bg-brand-dark text-brand-bg' },
+  upcoming: { label: 'Upcoming', color: 'bg-brand-purple' },
+  serving: { label: '🍽 Serving', color: 'bg-brand-accent' },
+  done: { label: 'Closed', color: 'bg-brand-dark text-brand-bg' },
 };
 
+const REDEEM_WINDOW_MS = 20 * 60 * 1000;
+const LS_REDEEM_KEY = (date) => `gecmess_redeemed_${date}`;
+
+// Check localStorage to see if a valid (non-expired) redemption exists
+function getRedeemedTimestamp() {
+  const ts = Number(localStorage.getItem(LS_REDEEM_KEY(format(new Date(), 'yyyy-MM-dd'))) || 0);
+  if (!ts) return null;
+  const elapsed = Date.now() - ts;
+  if (elapsed >= REDEEM_WINDOW_MS) {
+    localStorage.removeItem(LS_REDEEM_KEY(format(new Date(), 'yyyy-MM-dd')));
+    return null; // expired
+  }
+  return ts; // still valid
+}
+
 export default function Routine({ direction }) {
-  const today = format(new Date(), 'EEEE, dd MMMM yyyy');
-  const [showToken, setShowToken]         = useState(false);
-  const [meals, setMeals]                 = useState(FALLBACK_MEALS);
+  const today   = format(new Date(), 'EEEE, dd MMMM yyyy');
+  const [showToken,     setShowToken]     = useState(false);
+  // tokenRedeemed: token was used and is within 20-min viewing window
+  const [tokenRedeemed, setTokenRedeemed] = useState(() => !!getRedeemedTimestamp());
+  // tokenExpired: 20-min window has passed — button permanently disabled
+  const [tokenExpired,  setTokenExpired]  = useState(() => {
+    const ts = Number(localStorage.getItem(LS_REDEEM_KEY(format(new Date(), 'yyyy-MM-dd'))) || 0);
+    if (!ts) return false;
+    return Date.now() - ts >= REDEEM_WINDOW_MS;
+  });
+  const [meals,         setMeals]         = useState(FALLBACK_MEALS);
   const [announcements, setAnnouncements] = useState([]);
+
 
   // Live menu from Firestore
   useEffect(() => {
@@ -48,7 +70,7 @@ export default function Routine({ direction }) {
       if (!data) return;
       const parsed = ['breakfast', 'lunch', 'snacks', 'dinner'].map(id => ({
         id,
-        type:  id.charAt(0).toUpperCase() + id.slice(1),
+        type: id.charAt(0).toUpperCase() + id.slice(1),
         items: data[id]?.items || [],
         ...MEAL_META[id],
       }));
@@ -75,11 +97,18 @@ export default function Routine({ direction }) {
             <p className="font-sans text-sm text-brand-light mt-0.5">{today}</p>
           </div>
           <motion.button
-            whileTap={{ scale: 0.93 }}
-            onClick={() => setShowToken(true)}
-            className="px-4 py-2.5 bg-brand-secondary border-2 border-brand-dark rounded-brutal shadow-brutal-sm font-sans font-bold text-sm text-brand-dark hover:shadow-brutal transition-shadow"
+            whileTap={!tokenExpired ? { scale: 0.93 } : {}}
+            onClick={() => !tokenExpired && setShowToken(true)}
+            disabled={tokenExpired}
+            className={`px-4 py-2.5 border-2 border-brand-dark rounded-brutal shadow-brutal-sm font-sans font-bold text-sm
+              transition-all
+              ${tokenExpired
+                ? 'bg-gray-300 text-gray-400 cursor-not-allowed opacity-60'
+                : tokenRedeemed
+                ? 'bg-brand-accent text-brand-dark hover:shadow-brutal'
+                : 'bg-brand-secondary text-brand-dark hover:shadow-brutal'}`}
           >
-            Show Token
+            {tokenExpired ? 'Token Used' : tokenRedeemed ? 'View Redeemed ✓' : 'Show Token'}
           </motion.button>
         </div>
 
@@ -87,7 +116,7 @@ export default function Routine({ direction }) {
         <div className="flex flex-col gap-4">
           {meals.map((meal, i) => {
             const status = getMealStatus(meal.id);
-            const badge  = STATUS_BADGE[status];
+            const badge = STATUS_BADGE[status];
             return (
               <motion.div
                 key={meal.id}
@@ -109,10 +138,10 @@ export default function Routine({ direction }) {
                   <div className="flex flex-wrap gap-2">
                     {meal.items.length > 0
                       ? meal.items.map(item => (
-                          <span key={item} className="px-3 py-1 bg-white/60 border border-brand-dark/20 rounded-pill font-sans text-xs font-medium">
-                            {item}
-                          </span>
-                        ))
+                        <span key={item} className="px-3 py-1 bg-white/60 border border-brand-dark/20 rounded-pill font-sans text-xs font-medium">
+                          {item}
+                        </span>
+                      ))
                       : <span className="font-sans text-xs text-brand-light italic">Menu not set yet</span>
                     }
                   </div>
@@ -122,6 +151,19 @@ export default function Routine({ direction }) {
           })}
         </div>
 
+        {/* Announcements heading */}
+        {announcements.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.28 }}
+            className="mt-6 mb-1 flex items-center gap-2"
+          >
+            <h3 className="font-serif font-bold text-lg text-brand-dark">Announcements</h3>
+            <span className="flex-1 h-0.5 bg-brand-dark/10 rounded" />
+          </motion.div>
+        )}
+
         {/* Announcements */}
         {announcements.slice(0, 3).map((ann, i) => (
           <motion.div
@@ -129,12 +171,20 @@ export default function Routine({ direction }) {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 + i * 0.06 }}
-            className="mt-4 bg-brand-purple border-2 border-brand-dark rounded-brutal p-4 shadow-brutal-sm"
+            className="mt-2 bg-brand-purple border-2 border-brand-dark rounded-brutal p-4 shadow-brutal-sm"
           >
             <p className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1">
               📢 {ann.title || 'Announcement'}
             </p>
             <p className="font-sans text-sm text-brand-dark">{ann.body}</p>
+            <p className="font-sans text-[10px] text-brand-light/70 mt-2">
+              🕐 {ann.createdAt?.toDate
+                ? new Date(ann.createdAt.toDate()).toLocaleString('en-IN', {
+                    day: '2-digit', month: 'short', year: 'numeric',
+                    hour: '2-digit', minute: '2-digit',
+                  })
+                : 'Just now'}
+            </p>
           </motion.div>
         ))}
 
@@ -156,7 +206,22 @@ export default function Routine({ direction }) {
         )}
       </AnimatedPage>
 
-      {showToken && <TokenOverlay onClose={() => setShowToken(false)} />}
+      {showToken && (
+        <TokenOverlay
+          onClose={(expired) => {
+            setShowToken(false);
+            if (expired === true) {
+              // 20-min window ended — disable the button permanently
+              setTokenExpired(true);
+              setTokenRedeemed(false);
+            } else {
+              // Normal X-button close — update button to 'View Redeemed ✓' if still valid
+              if (getRedeemedTimestamp()) setTokenRedeemed(true);
+            }
+          }}
+        />
+      )}
+
     </>
   );
 }

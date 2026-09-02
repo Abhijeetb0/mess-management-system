@@ -5,24 +5,20 @@ import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { getAllStudents, getAllCommittee, setUserRole } from '../../lib/firestoreService';
 
-/* ─────────────────────────────────────────────────────────
-   Super Admin — Committee Management (Phase 2: Firestore)
-   Hierarchy: Super Admin > Committee > Worker > Student
-   Super Admin can promote student→committee or demote back
-───────────────────────────────────────────────────────── */
+
 
 const ROLE_BADGE = {
-  student:     { label: 'Student',    color: 'bg-brand-bg' },
-  committee:   { label: 'Committee',  color: 'bg-brand-accent' },
-  worker:      { label: 'Worker',     color: 'bg-brand-primary' },
+  student: { label: 'Student', color: 'bg-brand-bg' },
+  committee: { label: 'Committee', color: 'bg-brand-accent' },
+  worker: { label: 'Worker', color: 'bg-brand-primary' },
   super_admin: { label: 'Super Admin', color: 'bg-brand-gold' },
 };
 
 export default function CommitteeMgmt() {
-  const [students,  setStudents]  = useState([]);
+  const [students, setStudents] = useState([]);
   const [committee, setCommittee] = useState([]);
-  const [loading,   setLoading]   = useState(true);
-  const [search,    setSearch]    = useState('');
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
   const [processing, setProcessing] = useState({});
 
   const load = async () => {
@@ -76,7 +72,7 @@ export default function CommitteeMgmt() {
 
   const filtered = students.filter(
     s => s.displayName?.toLowerCase().includes(search.toLowerCase()) ||
-         s.rollNumber?.toLowerCase().includes(search.toLowerCase())
+      s.rollNumber?.toLowerCase().includes(search.toLowerCase())
   );
 
   return (

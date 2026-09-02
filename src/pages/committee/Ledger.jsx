@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, XCircle, AlertTriangle, Printer, FileText, Calendar, Eye, X } from 'lucide-react';
+import { CheckCircle, XCircle, AlertTriangle, Printer, FileText, Calendar, Eye, X, ChevronDown, CheckCheck, Trash2 } from 'lucide-react';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { QRCodeSVG } from 'qrcode.react';
-import { listenPendingOptOuts, approveOptOut, rejectOptOut, getUser, applyPenalty, listenPenalties } from '../../lib/firestoreService';
+import { listenPendingOptOuts, approveOptOut, rejectOptOut, getUser, applyPenalty, listenPenalties, resolvePenalty, removePenalty } from '../../lib/firestoreService';
 import { useAuth } from '../../context/AuthContext';
 
 /* ─────────────────────────────────────────────────────────
@@ -47,7 +47,8 @@ export default function Ledger() {
   const [penaltyError, setPenaltyError] = useState('');
   const [penaltyBusy, setPenaltyBusy] = useState(false);
   const [penalties, setPenalties] = useState([]);
-  const [processing, setProcessing] = useState({});
+  const [penaltyOpen, setPenaltyOpen] = useState({}); // { [penaltyId]: bool }
+  const [penaltyAction, setPenaltyAction] = useState({}); // { [penaltyId]: 'resolving'|'removing' }
   const { user } = useAuth();
 
   useEffect(() => {
@@ -100,9 +101,9 @@ export default function Ledger() {
             {loading ? 'Loading...' : `${requests.length} pending approval`}
           </p>
         </div>
-        <BrutalButton icon={Printer} onClick={() => setShowPrint(true)} variant="secondary">
+        {/* <BrutalButton icon={Printer} onClick={() => setShowPrint(true)} variant="secondary">
           Print Passes
-        </BrutalButton>
+        </BrutalButton> */}
       </div>
 
       {/* Request cards */}
@@ -258,38 +259,127 @@ export default function Ledger() {
             <p className="font-sans text-sm text-brand-light">No penalties applied yet.</p>
           </BrutalCard>
         ) : (
-          penalties.map((p, i) => (
-            <motion.div
-              key={p.id}
-              initial={{ opacity: 0, x: -10 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: i * 0.03 }}
-            >
-              <BrutalCard color="bg-brand-secondary" className="p-4">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-full bg-white border-2 border-brand-dark flex items-center justify-center font-serif font-bold text-sm shrink-0">
-                      {(p.studentName || '?')[0]}
-                    </div>
-                    <div>
-                      <p className="font-sans font-bold text-sm">{p.studentName}</p>
-                      <p className="font-mono text-xs text-brand-light">{p.rollNumber}</p>
-                      <p className="font-sans text-xs text-brand-dark/70 mt-0.5">{p.reason}</p>
+          penalties.map((p, i) => {
+            const isOpen   = !!penaltyOpen[p.id];
+            const busy     = penaltyAction[p.id];
+            const resolved = !!p.resolved;
+
+            const handleResolve = async () => {
+              if (busy || resolved) return;
+              setPenaltyAction(a => ({ ...a, [p.id]: 'resolving' }));
+              try {
+                await resolvePenalty(p.id, p.uid, p.amount);
+                setPenaltyOpen(o => ({ ...o, [p.id]: false }));
+              } catch (err) { console.error(err); }
+              finally { setPenaltyAction(a => ({ ...a, [p.id]: null })); }
+            };
+
+            const handleRemove = async () => {
+              if (busy) return;
+              if (!window.confirm(`Remove this penalty record? The student's wallet will NOT be refunded.`)) return;
+              setPenaltyAction(a => ({ ...a, [p.id]: 'removing' }));
+              try {
+                await removePenalty(p.id);
+              } catch (err) { console.error(err); }
+              finally { setPenaltyAction(a => ({ ...a, [p.id]: null })); }
+            };
+
+            return (
+              <motion.div
+                key={p.id}
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: i * 0.03 }}
+              >
+                <BrutalCard
+                  color={resolved ? 'bg-brand-accent/60' : 'bg-brand-secondary'}
+                  className="overflow-hidden"
+                >
+                  {/* Main row */}
+                  <div className="p-4">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-white border-2 border-brand-dark flex items-center justify-center font-serif font-bold text-sm shrink-0">
+                          {(p.studentName || '?')[0]}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <p className="font-sans font-bold text-sm">{p.studentName}</p>
+                            {resolved && (
+                              <span className="inline-flex items-center gap-1 font-sans text-[9px] font-bold uppercase tracking-wider text-green-700 bg-green-100 border border-green-400 px-1.5 py-0.5 rounded-pill">
+                                <CheckCheck size={9} /> Resolved
+                              </span>
+                            )}
+                          </div>
+                          <p className="font-mono text-xs text-brand-light">{p.rollNumber}</p>
+                          <p className="font-sans text-xs text-brand-dark/70 mt-0.5">{p.reason}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="text-right shrink-0">
+                          <p className="font-serif font-bold text-lg text-brand-dark">−₹{p.amount}</p>
+                          <p className="font-sans text-[10px] text-brand-light">₹{p.balanceBefore} → ₹{p.balanceAfter}</p>
+                          <p className="font-sans text-[10px] text-brand-light">
+                            By {p.appliedBy} · {p.appliedAt?.toDate ? new Date(p.appliedAt.toDate()).toLocaleDateString('en-IN') : 'Just now'}
+                          </p>
+                        </div>
+                        {/* Expand chevron */}
+                        <motion.button
+                          onClick={() => setPenaltyOpen(o => ({ ...o, [p.id]: !isOpen }))}
+                          animate={{ rotate: isOpen ? 180 : 0 }}
+                          transition={{ duration: 0.2 }}
+                          className="w-8 h-8 flex items-center justify-center rounded-brutal border-2 border-brand-dark/30 hover:border-brand-dark transition-colors shrink-0"
+                        >
+                          <ChevronDown size={15} />
+                        </motion.button>
+                      </div>
                     </div>
                   </div>
-                  <div className="text-right shrink-0">
-                    <p className="font-serif font-bold text-lg text-brand-dark">−₹{p.amount}</p>
-                    <p className="font-sans text-[10px] text-brand-light">
-                      ₹{p.balanceBefore} → ₹{p.balanceAfter}
-                    </p>
-                    <p className="font-sans text-[10px] text-brand-light">
-                      By {p.appliedBy} · {p.appliedAt?.toDate ? new Date(p.appliedAt.toDate()).toLocaleDateString('en-IN') : 'Just now'}
-                    </p>
-                  </div>
-                </div>
-              </BrutalCard>
-            </motion.div>
-          ))
+
+                  {/* Expandable action row */}
+                  <AnimatePresence>
+                    {isOpen && (
+                      <motion.div
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        transition={{ duration: 0.22, ease: 'easeInOut' }}
+                        className="overflow-hidden"
+                      >
+                        <div className="border-t-2 border-brand-dark/20 px-4 py-3 flex items-center gap-3 flex-wrap bg-white/40">
+                          <p className="font-sans text-xs text-brand-light flex-1">
+                            {resolved ? 'Penalty already resolved.' : 'Choose an action for this penalty:'}
+                          </p>
+                          {/* Resolve */}
+                          <button
+                            onClick={handleResolve}
+                            disabled={!!busy || resolved}
+                            className="flex items-center gap-1.5 font-sans font-semibold text-xs px-3 py-2 rounded-brutal border-2 border-brand-dark bg-brand-accent hover:shadow-brutal-sm transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {busy === 'resolving'
+                              ? <span className="animate-spin inline-block">⏳</span>
+                              : <CheckCheck size={13} />}
+                            {resolved ? 'Resolved' : 'Mark Resolved'}
+                          </button>
+                          {/* Remove */}
+                          <button
+                            onClick={handleRemove}
+                            disabled={!!busy}
+                            className="flex items-center gap-1.5 font-sans font-semibold text-xs px-3 py-2 rounded-brutal border-2 border-brand-dark bg-brand-secondary hover:shadow-brutal-sm transition-shadow disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {busy === 'removing'
+                              ? <span className="animate-spin inline-block">⏳</span>
+                              : <Trash2 size={13} />}
+                            Remove
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </BrutalCard>
+              </motion.div>
+            );
+          })
         )}
       </div>
 

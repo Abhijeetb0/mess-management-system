@@ -1,101 +1,124 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { getTodayToken, ANIM_COMPONENT_MAP } from '../utils/tokenUtils';
 
-/* ─────────────────────────────────────────────────────────
+/* ────────────────────────────────────────────────────────
    TokenOverlay — Full-screen meal pass
-   • Burn-on-Tap: mess worker taps the token area → turns dark
-     gray with "MEAL REDEEMED" banner + haptic pulse
-   • localStorage persistence: redeemed state survives refresh
-     until the meal window expires
-───────────────────────────────────────────────────────── */
+   • Tap the name/roll box to redeem
+   • Overlay can be closed & reopened during 20-min window
+     to view redeemed state again
+   • After 20 min: onClose(true) fires, parent disables button
+──────────────────────────────────────────────────────── */
 
-function useLiveClock() {
+const REDEEM_WINDOW_MS = 20 * 60 * 1000; // 20 minutes in ms
+const LS_KEY = (date) => `gecmess_redeemed_${date}`;
+
+function useLiveClock(frozen) {
   const [time, setTime] = useState(new Date());
   useEffect(() => {
+    if (frozen) return; // stop ticking when redeemed
     const id = setInterval(() => setTime(new Date()), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [frozen]);
   return time;
 }
 
-/* Returns the current meal key: 'breakfast' | 'lunch' | 'snacks' | 'dinner' | null */
-function getCurrentMealKey() {
-  const h = new Date().getHours();
-  if (h >= 8  && h < 10) return 'breakfast';
-  if (h >= 13 && h < 15) return 'lunch';
-  if (h >= 18 && h < 19) return 'snacks';
-  if (h >= 20 && h < 22) return 'dinner';
-  return null; // between meals
-}
-
-/* Returns the expiry hour for a meal window */
-const MEAL_END_HOUR = { breakfast: 10, lunch: 15, snacks: 19, dinner: 22 };
-
-const LS_KEY = (mealKey, date) => `gecmess_redeemed_${mealKey}_${date}`;
-
 export default function TokenOverlay({ onClose }) {
-  const { user }                 = useAuth();
-  const time                     = useLiveClock();
+  const { user } = useAuth();
   const { asset, animationType } = getTodayToken();
-
-  const timeStr  = format(time, 'h:mm:ss aa');
-  const dateStr  = format(time, 'EEE, dd MMM yyyy');
-  const dateKey  = format(time, 'yyyy-MM-dd');
   const AnimComp = ANIM_COMPONENT_MAP[animationType] ?? ANIM_COMPONENT_MAP['marquee-rtl'];
 
-  const mealKey = getCurrentMealKey();
+  const dateKey = format(new Date(), 'yyyy-MM-dd');
 
-  /* ── Redemption state ───────────────────────────────── */
-  const [redeemed,  setRedeemed]  = useState(false);
-  const [animating, setAnimating] = useState(false); // burn flash in progress
+  // Store onClose in a ref so the expiry timer never captures a stale closure
+  // and never gets restarted just because the parent re-rendered.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; });
 
-  // On mount, restore redeemed state from localStorage if still within meal window
+  // ── Redemption state ─────────────────────────────────────
+  const [redeemedAt, setRedeemedAt] = useState(null);  // timestamp ms
+  const [animating, setAnimating] = useState(false);
+  const [expired, setExpired] = useState(false);
+  const expireTimerRef = useRef(null);
+
+  const redeemed = redeemedAt !== null;
+
+  // Frozen time display: when redeemed the clock shows the exact moment of tap
+  const frozenTime = redeemedAt ? new Date(redeemedAt) : null;
+  const liveClock = useLiveClock(redeemed);
+  const displayTime = frozenTime ?? liveClock;
+
+  const timeStr = format(displayTime, 'h:mm:ss aa');
+  const dateStr = format(displayTime, 'EEE, dd MMM yyyy');
+
+  // ── Restore from localStorage on mount ──────────────────
   useEffect(() => {
-    if (!mealKey) return;
-    const stored = localStorage.getItem(LS_KEY(mealKey, dateKey));
-    if (stored) {
-      const endHour = MEAL_END_HOUR[mealKey];
-      if (new Date().getHours() < endHour) {
-        setRedeemed(true); // still within window — keep locked
-      } else {
-        localStorage.removeItem(LS_KEY(mealKey, dateKey)); // window passed, clean up
-      }
+    const stored = localStorage.getItem(LS_KEY(dateKey));
+    if (!stored) return;
+    const ts = Number(stored);
+    if (!ts) return;
+    const elapsed = Date.now() - ts;
+    if (elapsed >= REDEEM_WINDOW_MS) {
+      // Already expired before overlay was opened — close immediately (no expired flag,
+      // the parent's own expiry state will handle disabling the button)
+      localStorage.removeItem(LS_KEY(dateKey));
+      setExpired(true);
+      onCloseRef.current?.(); // no argument — parent will re-read localStorage
+    } else {
+      setRedeemedAt(ts);
+      scheduleExpiry(REDEEM_WINDOW_MS - elapsed);
     }
-  }, [mealKey, dateKey]);
+  }, []); // eslint-disable-line
 
-  // Expire check every minute
-  useEffect(() => {
-    if (!redeemed || !mealKey) return;
-    const id = setInterval(() => {
-      const endHour = MEAL_END_HOUR[mealKey];
-      if (new Date().getHours() >= endHour) {
-        setRedeemed(false);
-        localStorage.removeItem(LS_KEY(mealKey, dateKey));
-      }
-    }, 60_000);
-    return () => clearInterval(id);
-  }, [redeemed, mealKey, dateKey]);
+  // ── Schedule the 20-min expiry timer ────────────────────
+  // No external deps — uses onCloseRef so the timer is created once
+  // and never restarted by parent re-renders (e.g. clock ticks).
+  const scheduleExpiry = useCallback((ms) => {
+    clearTimeout(expireTimerRef.current);
+    expireTimerRef.current = setTimeout(() => {
+      localStorage.removeItem(LS_KEY(dateKey));
+      setExpired(true);
+      onCloseRef.current?.(true); // true = expired flag for parent
+    }, ms);
+  }, [dateKey]); // dateKey is stable (formatted once) — safe dep
 
-  /* ── Burn tap handler ───────────────────────────────── */
-  const handleBurn = useCallback(() => {
-    if (redeemed || animating || !mealKey) return;
+  useEffect(() => () => clearTimeout(expireTimerRef.current), []);
+
+  // ── Tap-to-redeem (on the name/roll box) ────────────────
+  const handleRedeem = useCallback(() => {
+    if (redeemed || animating) return;
     setAnimating(true);
 
-    // Haptic pulse if available
+    // Haptic on supported devices
     if (navigator.vibrate) navigator.vibrate([40, 30, 40]);
 
     setTimeout(() => {
-      setRedeemed(true);
+      const now = Date.now();
+      setRedeemedAt(now);
       setAnimating(false);
-      localStorage.setItem(LS_KEY(mealKey, dateKey), '1');
-    }, 600);
-  }, [redeemed, animating, mealKey, dateKey]);
+      localStorage.setItem(LS_KEY(dateKey), String(now));
+      scheduleExpiry(REDEEM_WINDOW_MS);
+    }, 500);
+  }, [redeemed, animating, dateKey, scheduleExpiry]);
 
-  const canBurn = !!mealKey && !redeemed;
+  // Remaining time display
+  const [remaining, setRemaining] = useState('');
+  useEffect(() => {
+    if (!redeemed || !redeemedAt) return;
+    const tick = () => {
+      const left = REDEEM_WINDOW_MS - (Date.now() - redeemedAt);
+      if (left <= 0) { setRemaining('Expired'); return; }
+      const m = Math.floor(left / 60000);
+      const s = Math.floor((left % 60000) / 1000);
+      setRemaining(`Expires in ${m}m ${String(s).padStart(2, '0')}s`);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [redeemed, redeemedAt]);
 
   return (
     <div
@@ -108,7 +131,6 @@ export default function TokenOverlay({ onClose }) {
         animate={{ scale: 1, opacity: 1, y: 0 }}
         exit={{ scale: 0.82, opacity: 0, y: 48 }}
         transition={{ type: 'spring', stiffness: 380, damping: 28 }}
-        onClick={handleBurn}
         className={`
           relative w-full max-w-[340px] rounded-[24px] border-2 shadow-brutal-lg
           flex flex-col overflow-hidden
@@ -116,7 +138,6 @@ export default function TokenOverlay({ onClose }) {
           ${redeemed
             ? 'bg-gray-400 border-gray-600'
             : `${asset.bg} border-brand-dark`}
-          ${canBurn ? 'cursor-pointer active:scale-[0.98]' : ''}
         `}
         style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
         onContextMenu={e => e.preventDefault()}
@@ -126,21 +147,21 @@ export default function TokenOverlay({ onClose }) {
           {animating && (
             <motion.div
               initial={{ opacity: 0 }}
-              animate={{ opacity: [0, 0.7, 0] }}
-              transition={{ duration: 0.6, times: [0, 0.3, 1] }}
+              animate={{ opacity: [0, 0.75, 0] }}
+              transition={{ duration: 0.5, times: [0, 0.3, 1] }}
               className="absolute inset-0 bg-gray-700 z-20 rounded-[22px]"
             />
           )}
         </AnimatePresence>
 
-        {/* ── MEAL REDEEMED banner ── */}
+        {/* ── MEAL REDEEMED overlay ── */}
         <AnimatePresence>
           {redeemed && (
             <motion.div
               initial={{ opacity: 0, scale: 0.7 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ type: 'spring', stiffness: 400, damping: 22 }}
-              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[22px] bg-gray-500/80"
+              className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 rounded-[22px] bg-gray-600/80"
             >
               <motion.div
                 animate={{ scale: [1, 1.08, 1] }}
@@ -151,11 +172,11 @@ export default function TokenOverlay({ onClose }) {
               </motion.div>
               <div className="bg-gray-800 border-2 border-gray-600 rounded-brutal px-6 py-3 text-center shadow-brutal">
                 <p className="font-serif font-bold text-2xl text-white tracking-wide">MEAL REDEEMED</p>
-                <p className="font-sans text-xs text-gray-300 mt-1 capitalize">{mealKey} · {dateStr}</p>
+                <p className="font-sans text-xs text-gray-300 mt-0.5">
+                  Redeemed at {timeStr}
+                </p>
               </div>
-              <p className="font-sans text-xs text-gray-200/70 mt-1">
-                Token locked until meal window closes
-              </p>
+              <p className="font-sans text-xs text-gray-200/70">{remaining}</p>
             </motion.div>
           )}
         </AnimatePresence>
@@ -181,7 +202,7 @@ export default function TokenOverlay({ onClose }) {
             <span className="font-sans font-semibold text-xs text-brand-dark">📅 {dateStr}</span>
           </div>
 
-          {/* Clock */}
+          {/* Clock — frozen at redemption moment */}
           <motion.p
             key={timeStr}
             initial={{ opacity: 0.5 }}
@@ -201,42 +222,50 @@ export default function TokenOverlay({ onClose }) {
 
           {/* Label */}
           <p className={`font-serif italic text-base -mt-2 ${redeemed ? 'text-gray-600' : 'text-brand-dark/55'}`}>
-            {redeemed ? 'Meal Pass Used' : 'Active Meal Pass'}
+            {redeemed ? '' : 'Active Meal Pass'}
           </p>
 
-          {/* Name + Roll strip */}
-          <div
-            className="w-full mx-5 bg-white border-2 border-brand-dark rounded-brutal px-4 py-3.5 text-center shadow-brutal-sm"
+          {/* ── Tappable name + roll box (tap = redeem) ── */}
+          <motion.div
+            onClick={handleRedeem}
+            whileTap={!redeemed ? { scale: 0.96 } : {}}
+            className={`
+              w-full mx-5 bg-white border-2 rounded-brutal px-4 py-3.5 text-center shadow-brutal-sm
+              transition-colors
+              ${!redeemed
+                ? 'border-brand-dark cursor-pointer hover:bg-brand-primary/20 active:bg-brand-primary/30'
+                : 'border-gray-400 cursor-default bg-gray-100'}
+            `}
             style={{ width: 'calc(100% - 40px)' }}
           >
-            <p className="font-sans font-bold text-xl text-brand-dark leading-tight">
+            <p className={`font-sans font-bold text-xl leading-tight ${redeemed ? 'text-gray-500' : 'text-brand-dark'}`}>
               {user?.displayName ?? 'Student Name'}
             </p>
-            <p className="font-mono text-sm text-brand-light mt-0.5">
+            <p className={`font-mono text-sm mt-0.5 ${redeemed ? 'text-gray-400' : 'text-brand-light'}`}>
               {user?.rollNumber ?? '00CS000'}
             </p>
-          </div>
-
-          {/* Tap hint — only when a meal is active and not yet redeemed */}
-          {canBurn && (
-            <motion.p
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 2, repeat: Infinity }}
-              className="font-sans text-[11px] text-brand-dark/50 -mt-2"
-            >
-              Worker: tap token to redeem
-            </motion.p>
-          )}
+            {!redeemed && (
+              <motion.p
+                animate={{ opacity: [0.4, 1, 0.4] }}
+                transition={{ duration: 1.8, repeat: Infinity }}
+                className="font-sans text-[10px] text-brand-dark/40 mt-1"
+              >
+                Worker: tap here to redeem
+              </motion.p>
+            )}
+          </motion.div>
 
         </div>
       </motion.div>
 
-      {/* Close button */}
+      {/* Close button — must use arrow wrapper so NO argument is passed.
+          onClick={onClose} would pass the MouseEvent as the first arg,
+          which the parent's onClose(expired) would treat as truthy. */}
       <motion.button
         initial={{ opacity: 0, scale: 0.8 }}
         animate={{ opacity: 1, scale: 1 }}
         transition={{ delay: 0.18 }}
-        onClick={onClose}
+        onClick={() => onCloseRef.current?.()}
         className="mt-6 w-[52px] h-[52px] rounded-full bg-brand-bg border-2 border-brand-dark shadow-brutal flex items-center justify-center"
         aria-label="Close token"
       >
