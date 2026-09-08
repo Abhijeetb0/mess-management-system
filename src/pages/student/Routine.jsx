@@ -4,8 +4,7 @@ import { format } from 'date-fns';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalBadge } from '../../components/ui';
 import TokenOverlay from '../../components/TokenOverlay';
-import { listenTodayMenu, listenAnnouncements, getTokenRedemption } from '../../lib/firestoreService';
-import { useAuth } from '../../context/AuthContext';
+import { listenTodayMenu, listenAnnouncements } from '../../lib/firestoreService';
 
 
 
@@ -35,55 +34,11 @@ const STATUS_BADGE = {
   done: { label: 'Closed', color: 'bg-brand-dark text-brand-bg' },
 };
 
-const REDEEM_WINDOW_MS = 20 * 60 * 1000;
-const LS_REDEEM_KEY = (date) => `gecmess_redeemed_${date}`;
-
-// Check localStorage to see if a valid (non-expired) redemption exists
-function getRedeemedTimestamp() {
-  const ts = Number(localStorage.getItem(LS_REDEEM_KEY(format(new Date(), 'yyyy-MM-dd'))) || 0);
-  if (!ts) return null;
-  const elapsed = Date.now() - ts;
-  if (elapsed >= REDEEM_WINDOW_MS) {
-    localStorage.removeItem(LS_REDEEM_KEY(format(new Date(), 'yyyy-MM-dd')));
-    return null; // expired
-  }
-  return ts; // still valid
-}
-
 export default function Routine({ direction }) {
-  const { user } = useAuth();
-  const today   = format(new Date(), 'EEEE, dd MMMM yyyy');
-  const dateKey = format(new Date(), 'yyyy-MM-dd');
-  const [showToken,     setShowToken]     = useState(false);
-  // tokenRedeemed: token was used and is within 20-min viewing window
-  const [tokenRedeemed, setTokenRedeemed] = useState(() => !!getRedeemedTimestamp());
-  // tokenExpired: 20-min window has passed — button permanently disabled
-  const [tokenExpired,  setTokenExpired]  = useState(() => {
-    const ts = Number(localStorage.getItem(LS_REDEEM_KEY(format(new Date(), 'yyyy-MM-dd'))) || 0);
-    if (!ts) return false;
-    return Date.now() - ts >= REDEEM_WINDOW_MS;
-  });
-  const [meals,         setMeals]         = useState(FALLBACK_MEALS);
+  const today = format(new Date(), 'EEEE, dd MMMM yyyy');
+  const [showToken, setShowToken] = useState(false);
+  const [meals, setMeals] = useState(FALLBACK_MEALS);
   const [announcements, setAnnouncements] = useState([]);
-
-  // If localStorage is empty (different device / cleared), check Firestore
-  // so the button shows 'View Redeemed ✓' correctly without opening the overlay
-  useEffect(() => {
-    if (tokenRedeemed || tokenExpired) return; // already know state from localStorage
-    if (!user?.uid) return;
-    getTokenRedemption(user.uid).then((remote) => {
-      if (!remote || remote.date !== dateKey || !remote.redeemedAt) return;
-      const elapsed = Date.now() - remote.redeemedAt;
-      if (elapsed >= REDEEM_WINDOW_MS) {
-        setTokenExpired(true);
-      } else {
-        // Sync to localStorage so TokenOverlay can pick it up instantly
-        localStorage.setItem(LS_REDEEM_KEY(dateKey), String(remote.redeemedAt));
-        setTokenRedeemed(true);
-      }
-    }).catch(() => { /* offline — ignore */ });
-  }, [user?.uid]); // eslint-disable-line
-
 
   // Live menu from Firestore
   useEffect(() => {
@@ -118,18 +73,11 @@ export default function Routine({ direction }) {
             <p className="font-sans text-sm text-brand-light mt-0.5">{today}</p>
           </div>
           <motion.button
-            whileTap={!tokenExpired ? { scale: 0.93 } : {}}
-            onClick={() => !tokenExpired && setShowToken(true)}
-            disabled={tokenExpired}
-            className={`px-4 py-2.5 border-2 border-brand-dark rounded-brutal shadow-brutal-sm font-sans font-bold text-sm
-              transition-all
-              ${tokenExpired
-                ? 'bg-gray-300 text-gray-400 cursor-not-allowed opacity-60'
-                : tokenRedeemed
-                ? 'bg-brand-accent text-brand-dark hover:shadow-brutal'
-                : 'bg-brand-secondary text-brand-dark hover:shadow-brutal'}`}
+            whileTap={{ scale: 0.93 }}
+            onClick={() => setShowToken(true)}
+            className="px-4 py-2.5 bg-brand-secondary border-2 border-brand-dark rounded-brutal shadow-brutal-sm font-sans font-bold text-sm text-brand-dark hover:shadow-brutal transition-shadow"
           >
-            {tokenExpired ? 'Token Used' : tokenRedeemed ? 'View Redeemed ✓' : 'Show Token'}
+            Show Token
           </motion.button>
         </div>
 
@@ -227,22 +175,7 @@ export default function Routine({ direction }) {
         )}
       </AnimatedPage>
 
-      {showToken && (
-        <TokenOverlay
-          onClose={(expired) => {
-            setShowToken(false);
-            if (expired === true) {
-              // 20-min window ended — disable the button permanently
-              setTokenExpired(true);
-              setTokenRedeemed(false);
-            } else {
-              // Normal X-button close — update button to 'View Redeemed ✓' if still valid
-              if (getRedeemedTimestamp()) setTokenRedeemed(true);
-            }
-          }}
-        />
-      )}
-
+      {showToken && <TokenOverlay onClose={() => setShowToken(false)} />}
     </>
   );
 }

@@ -92,9 +92,8 @@ service cloud.firestore {
       allow read: if isCommittee();
       // Committee can create penalties
       allow create: if isCommittee();
-      // Committee can update (mark resolved) and delete penalty records
-      allow update: if isCommittee();
-      allow delete: if isCommittee();
+      // Only admin can delete penalty records
+      allow delete: if isAdmin();
     }
   }
 }
