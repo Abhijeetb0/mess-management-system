@@ -20,17 +20,7 @@ const MEAL_WINDOWS = [
   { key: 'dinner',    label: 'Dinner',     emoji: '🌙',  start: 20, end: 22, color: '#d1fae5', border: '#059669' },
 ];
 
-function getActiveMeal(hour) {
-  return MEAL_WINDOWS.find(m => hour >= m.start && hour < m.end) ?? null;
-}
-
-function useLiveClock() {
-  const [time, setTime] = useState(new Date());
-  useEffect(() => {
-    const id = setInterval(() => setTime(new Date()), 1000);
-    return () => clearInterval(id);
-  }, []);
-  return time;
+/* ─────────────────────────────────────────────────────────
    🔧 DEV TESTING — override the current hour here to
    simulate a specific meal window without waiting for it.
 
@@ -44,18 +34,20 @@ function useLiveClock() {
 
    Remember to set back to null before going live!
 ───────────────────────────────────────────────────────── */
-const DEV_HOUR = 13; // ← change this to test
+const DEV_HOUR = null; // ← change this to test
 
-const MEAL_WINDOWS = [
-  { key: 'breakfast', label: 'Breakfast', emoji: '☀️', start: 8, end: 10, color: '#fef3c7', border: '#d97706' },
-  { key: 'lunch', label: 'Lunch', emoji: '🌤️', start: 13, end: 15, color: '#fce7f3', border: '#db2777' },
-  { key: 'snacks', label: 'Snacks', emoji: '🫖', start: 18, end: 19, color: '#ede9fe', border: '#7c3aed' },
-  { key: 'dinner', label: 'Dinner', emoji: '🌙', start: 20, end: 22, color: '#d1fae5', border: '#059669' },
-];
-
-function getActiveMeal() {
-  const h = DEV_HOUR ?? new Date().getHours();
+function getActiveMeal(hour) {
+  const h = DEV_HOUR !== null ? DEV_HOUR : hour;
   return MEAL_WINDOWS.find(m => h >= m.start && h < m.end) ?? null;
+}
+
+function useLiveClock() {
+  const [time, setTime] = useState(new Date());
+  useEffect(() => {
+    const id = setInterval(() => setTime(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return time;
 }
 
 export default function TokenOverlay({ onClose }) {
@@ -67,22 +59,6 @@ export default function TokenOverlay({ onClose }) {
   const dateStr = format(time, 'yyyy-MM-dd');
   const timeStr = format(time, 'h:mm:ss aa');
   const dayStr  = format(time, 'EEE, dd MMM yyyy');
-
-  // QR payload — changes per meal per day per student
-  const qrPayload = meal
-    ? `GECMESS|${user?.uid}|${dateStr}|${meal.key}`
-    : null;
-  const [meal, setMeal] = useState(getActiveMeal);
-
-  // Re-check meal window every minute (in case it opens/closes while token is shown)
-  useEffect(() => {
-    if (DEV_HOUR !== null) return; // skip polling in dev override mode
-    const id = setInterval(() => setMeal(getActiveMeal()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const dateStr = format(new Date(), 'yyyy-MM-dd');
-  const dayStr = format(new Date(), 'EEE, dd MMM yyyy');
 
   const qrPayload = meal ? `GECMESS|${user?.uid}|${dateStr}|${meal.key}` : null;
 
@@ -100,54 +76,6 @@ export default function TokenOverlay({ onClose }) {
         style={{ userSelect: 'none', WebkitUserSelect: 'none' }}
         onContextMenu={e => e.preventDefault()}
       >
-        {/* ── Header strip (meal-coloured) ── */}
-        <div
-          className="flex items-center justify-between px-5 py-4"
-          style={{ background: meal ? meal.color : '#f3f4f6', borderBottom: `2px solid ${meal ? meal.border : '#d1d5db'}` }}
-        >
-          <div>
-            <p className="font-sans font-bold text-xs uppercase tracking-widest text-brand-dark/60">
-              {meal ? `${meal.emoji} ${meal.label} Pass` : '⏳ Between Meals'}
-            </p>
-            <p className="font-mono font-bold text-2xl text-brand-dark leading-none mt-0.5">{timeStr}</p>
-            <p className="font-sans text-[10px] text-brand-dark/50 mt-0.5">{dayStr}</p>
-          </div>
-          <div className="text-right">
-            <p className="font-sans text-[10px] text-brand-dark/40 uppercase tracking-wider">GEC Mess</p>
-            {meal && (
-              <p className="font-sans text-[10px] text-brand-dark/50">
-                Valid {meal.start}:00 – {meal.end}:00
-              </p>
-            )}
-          </div>
-        </div>
-
-        {/* ── QR Code area ── */}
-        <div className="flex flex-col items-center px-5 py-5">
-          {qrPayload ? (
-            <>
-              <div className="rounded-brutal border-2 border-brand-dark p-3 bg-white shadow-brutal-sm mb-3">
-                <QRCodeSVG
-                  value={qrPayload}
-                  size={200}
-                  level="M"
-                  includeMargin={false}
-                  fgColor="#1a1209"
-                />
-              </div>
-              <motion.p
-                animate={{ opacity: [0.5, 1, 0.5] }}
-                transition={{ duration: 2, repeat: Infinity }}
-                className="font-sans text-[10px] text-brand-dark/40 mb-1"
-              >
-                Show this to the mess worker
-              </motion.p>
-            </>
-          ) : (
-            <div className="w-[200px] h-[200px] rounded-brutal border-2 border-brand-dark/20 bg-brand-bg flex flex-col items-center justify-center gap-2 mb-3">
-              <span className="text-4xl">⏳</span>
-              <p className="font-sans text-xs text-brand-dark/50 text-center px-4">
-                No active meal right now.<br />QR will appear during meal windows.
         {/* ── Meal header strip ── */}
         <div
           className="px-5 py-4 flex items-center justify-between"
@@ -207,9 +135,6 @@ export default function TokenOverlay({ onClose }) {
 
         {/* ── Footer ── */}
         <div className="px-5 py-3 flex items-center justify-between">
-          <p className="font-sans text-[9px] text-brand-dark/30 uppercase tracking-widest">GEC Sheikhpura</p>
-        {/* ── Footer ── */}
-        <div className="border-t-2 border-dashed border-brand-dark/15 px-5 py-2 flex items-center justify-between">
           <p className="font-sans text-[9px] text-brand-dark/30 uppercase tracking-widest">GEC Sheikhpura Mess</p>
           <p className="font-mono text-[9px] text-brand-dark/30">{dateStr}</p>
         </div>
