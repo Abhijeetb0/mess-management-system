@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Lock, AlertCircle, Upload, Calendar, Hash, FileText, ShieldAlert, CheckCircle, Clock } from 'lucide-react';
-import { format } from 'date-fns';
+import { Lock, AlertCircle, Upload, Calendar, Hash, FileText, ShieldAlert, CheckCircle, Clock, Eye, X } from 'lucide-react';
+import { format, addDays } from 'date-fns';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton } from '../../components/ui';
 import { Toast } from '../../components/Feedback';
@@ -14,7 +14,10 @@ import { submitOptOut, listenMyOptOuts } from '../../lib/firestoreService';
 ───────────────────────────────────────────────────────── */
 
 const REFUND_PER_DAY = 100;
-const TODAY_ISO = format(new Date(), 'yyyy-MM-dd');
+const getTodayISO = () => format(new Date(), 'yyyy-MM-dd');
+const getTomorrowISO = () => format(addDays(new Date(), 1), 'yyyy-MM-dd');
+const TODAY_ISO = getTodayISO();
+const TOMORROW_ISO = getTomorrowISO();
 const DAYS_OPTIONS = [1,2,3,4,5,6,7,10,14,21,30];
 
 function useDeadlineLock() {
@@ -43,11 +46,38 @@ const STATUS_COLOR = {
   rejected: 'bg-brand-secondary',
 };
 
+function DocViewModal({ base64, name, onClose }) {
+  return (
+    <div className="fixed inset-0 bg-brand-dark/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="bg-brand-bg border-2 border-brand-dark rounded-brutal shadow-brutal-lg p-5 w-full max-w-lg max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <p className="font-sans font-bold text-sm truncate">{name || 'Document'}</p>
+          <button onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </div>
+        <div className="flex-1 overflow-auto">
+          {base64?.startsWith('data:image') ? (
+            <img src={base64} alt={name} className="w-full rounded" />
+          ) : base64?.startsWith('data:application/pdf') ? (
+            <iframe src={base64} title={name} className="w-full h-[60vh] border rounded" />
+          ) : base64 ? (
+            <div className="text-center py-10">
+              <p className="font-sans text-sm text-brand-light mb-3">Preview not available for this file type.</p>
+              <a href={base64} download={name || 'document'} className="font-sans text-xs font-bold underline">Download file</a>
+            </div>
+          ) : (
+            <p className="font-sans text-sm text-brand-light text-center py-10">No document attached.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function OptOut({ direction }) {
   const { user } = useAuth();
   const { isLocked, timeLeft } = useDeadlineLock();
 
-  const [startDate, setStartDate] = useState(TODAY_ISO);
+  const [startDate, setStartDate] = useState(() => getTomorrowISO());
   const [numDays,   setNumDays]   = useState(1);
   const [reason,    setReason]    = useState('');
   const [docFile,   setDocFile]   = useState(null);
@@ -55,6 +85,7 @@ export default function OptOut({ direction }) {
   const [submitting, setSubmitting] = useState(false);
   const [errors,    setErrors]    = useState({});
   const [history,   setHistory]   = useState([]);
+  const [docView, setDocView] = useState(null);
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' });
 
   const showToast = (message, type = 'success') => {
@@ -74,6 +105,7 @@ export default function OptOut({ direction }) {
   const validate = () => {
     const e = {};
     if (!startDate)     e.startDate = 'Please select a start date.';
+    else if (startDate <= getTodayISO()) e.startDate = 'Same-day opt-out is not allowed. Please select tomorrow or a later date.';
     if (!reason.trim()) e.reason    = 'Please provide a reason.';
     if (!docFile)       e.docFile   = 'Please upload a valid document.';
     if (!agreed)        e.agreed    = 'You must agree to the terms.';
@@ -91,6 +123,11 @@ export default function OptOut({ direction }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isLocked || !validate()) return;
+    // Extra guard: same-day opt-out kabhi allow nahi (UI bypass ho tab bhi)
+    if (startDate <= getTodayISO()) {
+      showToast('Same-day opt-out is not allowed. Select tomorrow or later.', 'error');
+      return;
+    }
     setSubmitting(true);
     try {
       let docBase64 = null, docFileName = null;
@@ -111,9 +148,10 @@ export default function OptOut({ direction }) {
       });
       showToast(`Request submitted for ${numDays} day(s). Awaiting approval.`);
       setReason(''); setDocFile(null); setAgreed(false); setNumDays(1);
+      setStartDate(getTomorrowISO());
       setErrors({});
     } catch (err) {
-      showToast('Failed to submit. Check your connection.', 'error');
+      showToast(err?.message === 'SAME_DAY_NOT_ALLOWED' ? 'Same-day opt-out is not allowed. Select tomorrow or later.' : 'Failed to submit. Check your connection.', 'error');
       console.error(err);
     } finally {
       setSubmitting(false);
@@ -132,7 +170,7 @@ export default function OptOut({ direction }) {
             <span className="highlight-pink">Mess Opt-Out</span>
           </h2>
           <p className="font-sans text-sm text-brand-light mt-0.5">
-            Apply for a mess leave — window closes at 9:00 PM daily
+            Apply for a mess leave — same-day not allowed, window closes at 9:00 PM daily
           </p>
         </div>
 
@@ -149,25 +187,39 @@ export default function OptOut({ direction }) {
           </div>
         </motion.div>
 
-        {/* My Requests history */}
+        {/* My Requests history — doc hamesha accessible (pending/approved/rejected) */}
         {history.length > 0 && (
           <div className="mb-5">
             <h3 className="font-serif font-bold text-lg mb-2">My Requests</h3>
             <div className="flex flex-col gap-2">
               {history.map(r => (
-                <BrutalCard key={r.id} className="p-4 flex items-center justify-between gap-2">
-                  <div>
-                    <p className="font-sans font-bold text-sm">{r.numDays} day(s) from {r.startDate}</p>
-                    <p className="font-sans text-xs text-brand-light mt-0.5 truncate max-w-[180px]">{r.reason}</p>
+                <BrutalCard key={r.id} className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <div>
+                      <p className="font-sans font-bold text-sm">{r.numDays} day(s) from {r.startDate}</p>
+                      <p className="font-sans text-xs text-brand-light mt-0.5 truncate max-w-[180px]">{r.reason}</p>
+                    </div>
+                    <div className="flex flex-col items-end gap-1">
+                      <span className={`font-sans text-[10px] font-bold px-2 py-0.5 rounded-pill border border-brand-dark/20 ${STATUS_COLOR[r.status]}`}>
+                        {r.status}
+                      </span>
+                      {r.status === 'approved' && (
+                        <span className="font-serif font-bold text-brand-gold text-sm">₹{r.estimatedRefund}</span>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <span className={`font-sans text-[10px] font-bold px-2 py-0.5 rounded-pill border border-brand-dark/20 ${STATUS_COLOR[r.status]}`}>
-                      {r.status}
-                    </span>
-                    {r.status === 'approved' && (
-                      <span className="font-serif font-bold text-brand-gold text-sm">₹{r.estimatedRefund}</span>
-                    )}
-                  </div>
+                  {r.docBase64 && (
+                    <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-dark/10">
+                      <FileText size={13} className="text-brand-dark/60 shrink-0" />
+                      <span className="font-sans text-xs truncate max-w-[150px]">{r.docFileName || 'Document'}</span>
+                      <button
+                        onClick={() => setDocView({ base64: r.docBase64, name: r.docFileName })}
+                        className="flex items-center gap-1 font-sans text-xs font-semibold text-brand-light hover:text-brand-dark ml-auto"
+                      >
+                        <Eye size={12} /> View
+                      </button>
+                    </div>
+                  )}
                 </BrutalCard>
               ))}
             </div>
@@ -195,7 +247,7 @@ export default function OptOut({ direction }) {
                 <label className="flex items-center gap-1.5 font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5">
                   <Calendar size={13} /> Start Date
                 </label>
-                <input type="date" value={startDate} min={TODAY_ISO} onChange={e => setStartDate(e.target.value)}
+                <input type="date" value={startDate} min={TOMORROW_ISO} onChange={e => setStartDate(e.target.value)}
                   className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none focus:shadow-brutal-sm" />
                 {errors.startDate && <p className="font-sans text-xs text-red-600 mt-1">{errors.startDate}</p>}
               </div>
@@ -310,6 +362,18 @@ export default function OptOut({ direction }) {
                     <p className="font-sans text-[10px] uppercase text-brand-light font-bold tracking-wider mb-1">Reason</p>
                     <p className="font-sans text-xs text-brand-dark/80">{pendingReq.reason}</p>
                   </div>
+                  {pendingReq.docBase64 && (
+                    <div className="flex items-center gap-2 mt-3 pt-3 border-t-2 border-brand-dark/10">
+                      <FileText size={13} className="text-brand-dark/60 shrink-0" />
+                      <span className="font-sans text-xs truncate max-w-[150px]">{pendingReq.docFileName || 'Document'}</span>
+                      <button
+                        onClick={() => setDocView({ base64: pendingReq.docBase64, name: pendingReq.docFileName })}
+                        className="flex items-center gap-1 font-sans text-xs font-semibold hover:underline ml-auto"
+                      >
+                        <Eye size={12} /> View
+                      </button>
+                    </div>
+                  )}
                 </div>
                 
                 <p className="font-sans text-[10px] text-brand-dark mt-5 max-w-[220px]">
@@ -320,6 +384,7 @@ export default function OptOut({ direction }) {
           </motion.div>
         )}
       </AnimatedPage>
+      {docView && <DocViewModal {...docView} onClose={() => setDocView(null)} />}
     </>
   );
 }

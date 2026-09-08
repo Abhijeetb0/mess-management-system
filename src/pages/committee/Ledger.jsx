@@ -4,7 +4,7 @@ import { CheckCircle, XCircle, AlertTriangle, Printer, FileText, Calendar, Eye, 
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { QRCodeSVG } from 'qrcode.react';
-import { listenPendingOptOuts, approveOptOut, rejectOptOut, getUser, applyPenalty, listenPenalties, resolvePenalty, removePenalty } from '../../lib/firestoreService';
+import { listenPendingOptOuts, listenAllOptOuts, approveOptOut, rejectOptOut, getUser, applyPenalty, listenPenalties, resolvePenalty, removePenalty } from '../../lib/firestoreService';
 import { useAuth } from '../../context/AuthContext';
 
 /* ─────────────────────────────────────────────────────────
@@ -38,8 +38,10 @@ function DocViewModal({ base64, name, onClose }) {
 
 export default function Ledger() {
   const [requests, setRequests] = useState([]);
+  const [processed, setProcessed] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showPrint, setShowPrint] = useState(false);
+  const [processing, setProcessing] = useState({});
   const [docView, setDocView] = useState(null);
   const [penaltyUid, setPenaltyUid] = useState('');
   const [penaltyAmt, setPenaltyAmt] = useState('');
@@ -57,7 +59,10 @@ export default function Ledger() {
       setLoading(false);
     });
     const unsub2 = listenPenalties(setPenalties);
-    return () => { unsub1?.(); unsub2?.(); };
+    const unsub3 = listenAllOptOuts((all) => {
+      setProcessed(all.filter(r => r.status === 'approved' || r.status === 'rejected').slice(0, 30));
+    });
+    return () => { unsub1?.(); unsub2?.(); unsub3?.(); };
   }, []);
 
   const handleApprove = async (r) => {
@@ -201,6 +206,40 @@ export default function Ledger() {
             </motion.div>
           ))}
         </AnimatePresence>
+      </div>
+
+      {/* Refund status history — approve/reject ke baad bhi doc accessible */}
+      <h3 className="font-serif font-bold text-xl mb-3">Refund Status History</h3>
+      <div className="flex flex-col gap-2 max-w-3xl mb-10">
+        {processed.length === 0 ? (
+          <BrutalCard className="p-5 text-center">
+            <p className="font-sans text-sm text-brand-light">No processed requests yet.</p>
+          </BrutalCard>
+        ) : (
+          processed.map((r) => (
+            <BrutalCard key={r.id} className="p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-sans font-bold text-sm">{r.studentName || 'Unknown'} <span className="font-mono font-normal text-xs text-brand-light">· {r.rollNumber}</span></p>
+                  <p className="font-sans text-xs text-brand-light mt-0.5">{r.numDays} day{r.numDays > 1 ? 's' : ''} from {r.startDate} · ₹{r.estimatedRefund || 0}</p>
+                </div>
+                <BrutalBadge color={r.status === 'approved' ? 'bg-brand-accent' : 'bg-brand-secondary'}>{r.status}</BrutalBadge>
+              </div>
+              {r.docBase64 && (
+                <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-dark/10">
+                  <FileText size={13} className="text-brand-dark/60 shrink-0" />
+                  <span className="font-sans text-xs truncate max-w-[150px]">{r.docFileName || 'Document'}</span>
+                  <button
+                    onClick={() => setDocView({ base64: r.docBase64, name: r.docFileName })}
+                    className="flex items-center gap-1 font-sans text-xs font-semibold text-brand-light hover:text-brand-dark ml-auto"
+                  >
+                    <Eye size={12} /> View
+                  </button>
+                </div>
+              )}
+            </BrutalCard>
+          ))
+        )}
       </div>
 
       {/* Apply Penalty */}
