@@ -8,6 +8,7 @@ import {
   onAuthStateChanged,
   linkWithCredential,
   EmailAuthProvider,
+  updateProfile,
 } from 'firebase/auth';
 import { auth } from '../lib/firebase';
 import { getUser, setUser } from '../lib/firestoreService';
@@ -241,14 +242,18 @@ export function AuthProvider({ children }) {
   };
 
   /* ── Complete registration for new Google users ── */
-  const completeGoogleRegistration = async (rollNumber, password) => {
+  const completeGoogleRegistration = async (rollNumber, password, displayName) => {
     if (!pendingGoogle?.uid) throw new Error('No pending Google user');
     const fbUser = auth.currentUser;
     if (!fbUser) throw new Error('Auth state lost. Please sign in with Google again.');
 
+    const cleanName = (displayName || '').trim().replace(/\s+/g, ' ');
+    if (cleanName.length < 2) throw new Error('Please enter your full name.');
+    const cleanRoll = rollNumber.trim().toUpperCase();
+
     // Link an Email/Password credential so they can login with ID later
     try {
-      const credential = EmailAuthProvider.credential(toEmail(rollNumber), password);
+      const credential = EmailAuthProvider.credential(toEmail(cleanRoll), password);
       await linkWithCredential(fbUser, credential);
     } catch (err) {
       // If it says email-already-in-use, it means someone else already claimed this roll number!
@@ -261,14 +266,18 @@ export function AuthProvider({ children }) {
     }
 
     const profile = {
-      displayName: pendingGoogle.displayName || rollNumber.toUpperCase(),
-      rollNumber: rollNumber.toUpperCase(),
+      displayName: cleanName, // register me diya naam — yahi sab jagah dikhega
+      rollNumber: cleanRoll,
       role: 'student',
       walletBalance: 0,
       isActive: true,
       email: pendingGoogle.email, // store original gmail
     };
     await setUser(pendingGoogle.uid, profile);
+    // Google Auth profile me bhi wahi naam rakho taaki dono jagah same rahe
+    try {
+      await updateProfile(fbUser, { displayName: cleanName });
+    } catch (_) { /* non-critical — Firestore profile hi source of truth hai */ }
     // Claim session for the newly registered user
     await claimSession(pendingGoogle.uid);
     setPendingGoogle(null);

@@ -20,6 +20,7 @@ export default function Login() {
   const [showPass, setShowPass] = useState(false);
   const [regRoll, setRegRoll] = useState('');
   const [regPass, setRegPass] = useState('');
+  const [regName, setRegName] = useState('');
   const [showRegPass, setShowRegPass] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,6 +30,7 @@ export default function Login() {
     if (pendingGoogle) {
       setRegRoll('');
       setRegPass('');
+      setRegName(pendingGoogle.displayName || '');
       setStep('complete-registration');
     }
   }, [pendingGoogle]);
@@ -59,6 +61,7 @@ export default function Login() {
   /* ── Complete registration for new Google users ── */
   const handleCompleteReg = async (e) => {
     e.preventDefault();
+    if (regName.trim().length < 2) { setError('Please enter your full name.'); return; }
     if (!regRoll.trim()) { setError('Please enter your registration number.'); return; }
     if (!regPass.trim()) { setError('Please set a password for ID login.'); return; }
     if (regPass.length < 6) { setError('Password must be at least 6 characters.'); return; }
@@ -66,7 +69,7 @@ export default function Login() {
     setError('');
     setLoading(true);
     try {
-      await completeGoogleRegistration(regRoll.trim(), regPass);
+      await completeGoogleRegistration(regRoll.trim(), regPass, regName.trim());
       // AuthContext sets user → App.jsx navigates to student panel
     } catch (err) {
       console.error('Registration error:', err);
@@ -175,13 +178,24 @@ export default function Login() {
               <form onSubmit={handleCompleteReg} className="flex flex-col gap-4">
                 <div>
                   <label className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5 block">
+                    Full Name
+                  </label>
+                  <input
+                    value={regName}
+                    onChange={e => setRegName(e.target.value)}
+                    placeholder="e.g. Rahul Kumar"
+                    autoFocus
+                    className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
+                  />
+                </div>
+                <div>
+                  <label className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5 block">
                     Registration Number
                   </label>
                   <input
                     value={regRoll}
                     onChange={e => setRegRoll(e.target.value.toUpperCase())}
                     placeholder="e.g. 25105157XXX"
-                    autoFocus
                     className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-mono text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
                   />
                 </div>

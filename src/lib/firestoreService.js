@@ -340,14 +340,19 @@ export const listenViolations = (callback, max = 50) => {
 
 /**
  * Apply a penalty to a student:
- * - Deducts amount from wallet (min 0)
+ * - Deducts amount from wallet (negative balances are allowed)
  * - Writes a record to /penalties collection
  */
 export const applyPenalty = async (uid, { amount, reason, appliedBy }) => {
   const userSnap = await getDoc(doc(db, 'users', uid));
   if (!userSnap.exists()) throw new Error('Student not found');
   const student = userSnap.data();
-  const newBalance = Math.max(0, (student.walletBalance || 0) - amount);
+  const balanceBefore = Number(student.walletBalance) || 0;
+  const penaltyAmount = Number(amount);
+  if (!Number.isFinite(penaltyAmount) || penaltyAmount <= 0) {
+    throw new Error('Penalty amount must be greater than zero');
+  }
+  const newBalance = balanceBefore - penaltyAmount;
 
   await Promise.all([
     // Deduct from wallet
@@ -360,11 +365,11 @@ export const applyPenalty = async (uid, { amount, reason, appliedBy }) => {
       uid,
       studentName:  student.displayName || '',
       rollNumber:   student.rollNumber  || '',
-      amount,
+      amount: penaltyAmount,
       reason,
       appliedBy,
       appliedAt:    serverTimestamp(),
-      balanceBefore: student.walletBalance || 0,
+      balanceBefore,
       balanceAfter:  newBalance,
     }),
   ]);
@@ -394,14 +399,25 @@ export const listenMyPenalties = (uid, callback) => {
   );
 };
 
-/** Mark a penalty as resolved (and refund the amount back to the student's wallet) */
+/** Mark a penalty as resolved and refund only the amount actually deducted */
 export const resolvePenalty = async (penaltyId, uid, amount) => {
   const userSnap = await getDoc(doc(db, 'users', uid));
   if (!userSnap.exists()) throw new Error('Student not found');
-  const current = userSnap.data().walletBalance || 0;
+  const current = Number(userSnap.data().walletBalance) || 0;
+  const penalty = Number(amount) || 0;
+  const penaltySnapshot = await getDoc(doc(db, 'penalties', penaltyId));
+  if (!penaltySnapshot.exists()) throw new Error('Penalty not found');
+  const record = penaltySnapshot.data();
+  const hasBalanceSnapshot = Number.isFinite(Number(record.balanceBefore))
+    && Number.isFinite(Number(record.balanceAfter));
+  const deducted = Math.max(
+    0,
+    (Number(record.balanceBefore) || 0) - (Number(record.balanceAfter) || 0)
+  );
+  const refund = hasBalanceSnapshot ? deducted : Math.min(penalty, current);
   await Promise.all([
     updateDoc(doc(db, 'users', uid), {
-      walletBalance: current + amount,
+      walletBalance: current + refund,
       updatedAt: serverTimestamp(),
     }),
     updateDoc(doc(db, 'penalties', penaltyId), {
