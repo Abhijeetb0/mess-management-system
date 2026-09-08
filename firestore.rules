@@ -92,8 +92,19 @@ service cloud.firestore {
       allow read: if isCommittee();
       // Committee can create penalties
       allow create: if isCommittee();
+      // Committee can update (resolve) penalty records
+      allow update: if isCommittee();
       // Only admin can delete penalty records
-      allow delete: if isAdmin();
+      allow delete: if isAdmin() || isCommittee();
+    }
+
+    // ── /scans/{date}/{mealKey}/{uid} ──────────────────────
+    // Nested subcollection: scans/2026-09-08/lunch/abc123uid
+    match /scans/{date}/{mealKey}/{uid} {
+      // Workers create scan records when students enter
+      allow create, update: if isWorker() || isCommittee();
+      // Workers, committee, and admin can read scan records
+      allow read: if isAuth() && (isWorker() || isCommittee());
     }
   }
 }
