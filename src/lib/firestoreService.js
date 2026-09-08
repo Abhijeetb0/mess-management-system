@@ -180,6 +180,31 @@ export const rebuildBlocklist = async () => {
   return uids;
 };
 
+/* ── Meal Scans ─────────────────────────────────────────── */
+
+/** Record that a student's QR was scanned for a meal */
+export const recordScan = async (uid, mealKey, date, studentName, rollNumber) => {
+  await setDoc(
+    doc(db, 'scans', date, mealKey, uid),
+    { uid, mealKey, date, studentName, rollNumber, scannedAt: serverTimestamp() },
+    { merge: true }
+  );
+};
+
+/** Live listener for scans of a specific meal on a given date */
+export const listenMealScans = (date, mealKey, callback) =>
+  onSnapshot(
+    collection(db, 'scans', date, mealKey),
+    snap => callback(snap.docs.map(d => ({ uid: d.id, ...d.data() })))
+  );
+
+/** Get UIDs of students opted out today (for worker panel) */
+export const getTodayOptOutUIDs = async () => {
+  const today = TODAY();
+  const snap  = await getDoc(doc(db, 'blocklist', today));
+  return snap.exists() ? new Set(snap.data().uids || []) : new Set();
+};
+
 /* ── Penalties ──────────────────────────────────────────── */
 
 /**
