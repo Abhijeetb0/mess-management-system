@@ -32,7 +32,7 @@ function useLiveClock() {
     return () => clearInterval(id);
   }, []);
   return time;
-   🔧 DEV TESTING — override the current hour here to
+    DEV TESTING — override the current hour here to
    simulate a specific meal window without waiting for it.
 
    Set to null for live (real clock).
