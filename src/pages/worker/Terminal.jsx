@@ -30,6 +30,22 @@ const MEAL_WINDOWS = [
 
 function getCurrentMeal() {
   const h = new Date().getHours();
+/* ─────────────────────────────────────────────────────────
+   🔧 DEV TESTING — set the same value as in TokenOverlay.jsx
+   to simulate a meal window in the scanner.
+   Set to null for live (real clock).
+───────────────────────────────────────────────────────── */
+const DEV_HOUR = 13; // ← change this to test (must match TokenOverlay.jsx)
+
+const MEAL_WINDOWS = [
+  { key: 'breakfast', label: 'Breakfast', emoji: '☀️', start: 8, end: 10 },
+  { key: 'lunch', label: 'Lunch', emoji: '🌤️', start: 13, end: 15 },
+  { key: 'snacks', label: 'Snacks', emoji: '🫖', start: 18, end: 19 },
+  { key: 'dinner', label: 'Dinner', emoji: '🌙', start: 20, end: 22 },
+];
+
+function getCurrentMeal() {
+  const h = DEV_HOUR ?? new Date().getHours();
   return MEAL_WINDOWS.find(m => h >= m.start && h < m.end) ?? null;
 }
 
@@ -42,6 +58,10 @@ function parseQR(raw, today) {
   const meal = MEAL_WINDOWS.find(m => m.key === mealKey);
   if (!meal)                     return { error: 'Unknown meal type in QR' };
   const h = new Date().getHours();
+  if (date !== today) return { error: 'QR is from a different day' };
+  const meal = MEAL_WINDOWS.find(m => m.key === mealKey);
+  if (!meal) return { error: 'Unknown meal type in QR' };
+  const h = DEV_HOUR ?? new Date().getHours(); // uses override when testing
   if (h < meal.start || h >= meal.end)
     return { error: `This QR is for ${meal.label} (${meal.start}:00–${meal.end}:00)` };
   return { uid, mealKey, meal };
@@ -56,6 +76,11 @@ function StudentsPanel({ today, currentMeal }) {
   const [optOutUIDs,  setOptOutUIDs]  = useState(new Set());
   const [loading,     setLoading]     = useState(true);
   const [tab,         setTab]         = useState('all'); // 'all'|'scanned'|'out'
+  const [students, setStudents] = useState([]);
+  const [scanned, setScanned] = useState([]); // scan docs
+  const [optOutUIDs, setOptOutUIDs] = useState(new Set());
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('all'); // 'all'|'scanned'|'out'
 
   // Live students
   useEffect(() => {
@@ -85,6 +110,16 @@ function StudentsPanel({ today, currentMeal }) {
     { key: 'all',     label: 'Not In Yet', count: notScanned.length,   list: notScanned,   color: 'bg-brand-primary'   },
     { key: 'scanned', label: 'Scanned',    count: scannedList.length,  list: scannedList,  color: 'bg-brand-accent'    },
     { key: 'out',     label: 'Opted Out',  count: optedOutList.length, list: optedOutList, color: 'bg-brand-secondary' },
+  const scannedUIDs = new Set(scanned.map(s => s.uid));
+  const approved = students.filter(s => s.isApproved === true);
+  const notScanned = approved.filter(s => !scannedUIDs.has(s.uid) && !optOutUIDs.has(s.uid));
+  const scannedList = approved.filter(s => scannedUIDs.has(s.uid));
+  const optedOutList = students.filter(s => optOutUIDs.has(s.uid));
+
+  const TABS = [
+    { key: 'all', label: 'Not In Yet', count: notScanned.length, list: notScanned, color: 'bg-brand-primary' },
+    { key: 'scanned', label: 'Scanned', count: scannedList.length, list: scannedList, color: 'bg-brand-accent' },
+    { key: 'out', label: 'Opted Out', count: optedOutList.length, list: optedOutList, color: 'bg-brand-secondary' },
   ];
 
   const active = TABS.find(t => t.key === tab);
@@ -122,6 +157,9 @@ function StudentsPanel({ today, currentMeal }) {
               {tab === 'all'     ? (currentMeal ? 'All students have entered!' : 'Meal not active yet')
                : tab === 'scanned' ? 'No one scanned yet'
                : 'No opt-outs today'}
+              {tab === 'all' ? (currentMeal ? 'All students have entered!' : 'Meal not active yet')
+                : tab === 'scanned' ? 'No one scanned yet'
+                  : 'No opt-outs today'}
             </p>
           </BrutalCard>
         ) : (
@@ -169,6 +207,24 @@ export default function Terminal() {
   const canvasRef = useRef(null);
   const streamRef = useRef(null);
   const rafRef    = useRef(null);
+
+/* ══════════════════════════════════════════════════════════
+   Main Terminal
+══════════════════════════════════════════════════════════ */
+export default function Terminal() {
+  const { user, logout } = useAuth();
+  const [scanning, setScanning] = useState(false);
+  const [result, setResult] = useState(null);
+  const [camError, setCamError] = useState('');
+  const [tab, setTab] = useState('scan'); // 'scan' | 'students'
+
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const currentMeal = getCurrentMeal();
+
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef = useRef(null);
   const activeRef = useRef(false);
 
   useEffect(() => () => stopCamera(), []);
@@ -215,13 +271,14 @@ export default function Terminal() {
   const scanLoop = useCallback(() => {
     if (!activeRef.current) return;
     const video  = videoRef.current;
+    const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState < 2) {
       rafRef.current = requestAnimationFrame(scanLoop);
       return;
     }
     const ctx = canvas.getContext('2d');
-    canvas.width  = video.videoWidth;
+    canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -279,6 +336,56 @@ export default function Terminal() {
     denied:  'bg-brand-secondary border-brand-dark',
     invalid: 'bg-brand-primary border-brand-dark',
     error:   'bg-brand-primary border-brand-dark',
+
+  /* ── On scan ── */
+  const onScan = useCallback(async (raw) => {
+    stopCamera();
+    const parsed = parseQR(raw, today);
+
+    if (!parsed) {
+      setResult({ status: 'invalid', message: 'Not a valid MessApp QR code.' });
+      setTimeout(() => setResult(null), 6000);
+      return;
+    }
+    if (parsed.error) {
+      setResult({ status: 'error', message: parsed.error });
+      setTimeout(() => setResult(null), 6000);
+      return;
+    }
+
+    const { uid, mealKey, meal } = parsed;
+
+    // Check opt-out
+    const optOutUIDs = await getTodayOptOutUIDs();
+    if (optOutUIDs.has(uid)) {
+      setResult({ status: 'denied', message: `Opted out — deny ${meal.label} entry.`, uid });
+      setTimeout(() => setResult(null), 7000);
+      return;
+    }
+
+    // Record the scan
+    try {
+      const profile = await import('../../lib/firestoreService')
+        .then(m => m.getUser(uid));
+      await recordScan(uid, mealKey, today, profile?.displayName || '', profile?.rollNumber || '');
+      setResult({
+        status: 'allowed',
+        message: `${meal.emoji} ${meal.label} entry allowed`,
+        name: profile?.displayName || uid,
+        roll: profile?.rollNumber || '',
+      });
+    } catch {
+      setResult({ status: 'allowed', message: `Entry allowed`, name: uid, roll: '' });
+    }
+    setTimeout(() => setResult(null), 6000);
+  }, [today, stopCamera]); // eslint-disable-line
+
+  /* ─── Result colours ─── */
+  const RESULT_STYLE = {
+    allowed: 'bg-brand-accent border-brand-dark',
+    denied: 'bg-brand-secondary border-brand-dark',
+    invalid: 'bg-brand-primary border-brand-dark',
+    error: 'bg-brand-primary border-brand-dark',
   };
 
   return (
@@ -346,6 +453,7 @@ export default function Terminal() {
                 {result.status === 'allowed'
                   ? <CheckCircle size={28} className="text-green-700 shrink-0 mt-0.5" />
                   : <XCircle    size={28} className="text-red-700 shrink-0 mt-0.5"   />}
+                  : <XCircle size={28} className="text-red-700 shrink-0 mt-0.5" />}
                 <div>
                   <p className="font-serif font-bold text-base leading-tight">{result.message}</p>
                   {result.name && (
@@ -374,11 +482,14 @@ export default function Terminal() {
             {/* Corners */}
             {[['top-2 left-2','border-t-4 border-l-4'],['top-2 right-2','border-t-4 border-r-4'],
               ['bottom-2 left-2','border-b-4 border-l-4'],['bottom-2 right-2','border-b-4 border-r-4']].map(([p,b],i)=>(
+            {[['top-2 left-2', 'border-t-4 border-l-4'], ['top-2 right-2', 'border-t-4 border-r-4'],
+            ['bottom-2 left-2', 'border-b-4 border-l-4'], ['bottom-2 right-2', 'border-b-4 border-r-4']].map(([p, b], i) => (
               <div key={i} className={`absolute ${p} w-8 h-8 ${b} border-brand-gold rounded-sm`} />
             ))}
             <motion.div
               className="absolute left-3 right-3 h-0.5 bg-brand-gold/70 rounded"
               animate={{ top: ['8%','92%','8%'] }}
+              animate={{ top: ['8%', '92%', '8%'] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
             />
           </div>
@@ -393,6 +504,10 @@ export default function Terminal() {
                   transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }} />
                 {[['top-2 left-2','border-t-2 border-l-2'],['top-2 right-2','border-t-2 border-r-2'],
                   ['bottom-2 left-2','border-b-2 border-l-2'],['bottom-2 right-2','border-b-2 border-r-2']].map(([p,b],i)=>(
+                  animate={{ top: ['10%', '90%', '10%'] }}
+                  transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }} />
+                {[['top-2 left-2', 'border-t-2 border-l-2'], ['top-2 right-2', 'border-t-2 border-r-2'],
+                ['bottom-2 left-2', 'border-b-2 border-l-2'], ['bottom-2 right-2', 'border-b-2 border-r-2']].map(([p, b], i) => (
                   <div key={i} className={`absolute ${p} w-6 h-6 ${b} border-brand-dark rounded-sm`} />
                 ))}
                 <Camera size={32} className="text-brand-dark/25" />

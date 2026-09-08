@@ -31,6 +31,31 @@ function useLiveClock() {
     return () => clearInterval(id);
   }, []);
   return time;
+   🔧 DEV TESTING — override the current hour here to
+   simulate a specific meal window without waiting for it.
+
+   Set to null for live (real clock).
+   Set to a number (0-23) to force that hour:
+     8  → Breakfast  (8–10)
+     13 → Lunch      (13–15)
+     18 → Snacks     (18–19)
+     20 → Dinner     (20–22)
+     12 → No meal    (between windows)
+
+   Remember to set back to null before going live!
+───────────────────────────────────────────────────────── */
+const DEV_HOUR = 13; // ← change this to test
+
+const MEAL_WINDOWS = [
+  { key: 'breakfast', label: 'Breakfast', emoji: '☀️', start: 8, end: 10, color: '#fef3c7', border: '#d97706' },
+  { key: 'lunch', label: 'Lunch', emoji: '🌤️', start: 13, end: 15, color: '#fce7f3', border: '#db2777' },
+  { key: 'snacks', label: 'Snacks', emoji: '🫖', start: 18, end: 19, color: '#ede9fe', border: '#7c3aed' },
+  { key: 'dinner', label: 'Dinner', emoji: '🌙', start: 20, end: 22, color: '#d1fae5', border: '#059669' },
+];
+
+function getActiveMeal() {
+  const h = DEV_HOUR ?? new Date().getHours();
+  return MEAL_WINDOWS.find(m => h >= m.start && h < m.end) ?? null;
 }
 
 export default function TokenOverlay({ onClose }) {
@@ -47,6 +72,19 @@ export default function TokenOverlay({ onClose }) {
   const qrPayload = meal
     ? `GECMESS|${user?.uid}|${dateStr}|${meal.key}`
     : null;
+  const [meal, setMeal] = useState(getActiveMeal);
+
+  // Re-check meal window every minute (in case it opens/closes while token is shown)
+  useEffect(() => {
+    if (DEV_HOUR !== null) return; // skip polling in dev override mode
+    const id = setInterval(() => setMeal(getActiveMeal()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const dateStr = format(new Date(), 'yyyy-MM-dd');
+  const dayStr = format(new Date(), 'EEE, dd MMM yyyy');
+
+  const qrPayload = meal ? `GECMESS|${user?.uid}|${dateStr}|${meal.key}` : null;
 
   return (
     <div
@@ -110,11 +148,50 @@ export default function TokenOverlay({ onClose }) {
               <span className="text-4xl">⏳</span>
               <p className="font-sans text-xs text-brand-dark/50 text-center px-4">
                 No active meal right now.<br />QR will appear during meal windows.
+        {/* ── Meal header strip ── */}
+        <div
+          className="px-5 py-4 flex items-center justify-between"
+          style={{
+            background: meal ? meal.color : '#f3f4f6',
+            borderBottom: `2px solid ${meal ? meal.border : '#d1d5db'}`,
+          }}
+        >
+          <div>
+            <p className="font-sans font-bold text-sm text-brand-dark">
+              {meal ? `${meal.emoji} ${meal.label} Pass` : '⏳ No Active Meal'}
+            </p>
+            <p className="font-sans text-[11px] text-brand-dark/50 mt-0.5">{dayStr}</p>
+          </div>
+          {meal && (
+            <span className="font-sans text-[10px] text-brand-dark/50">
+              {meal.start}:00 – {meal.end}:00
+            </span>
+          )}
+        </div>
+
+        {/* ── QR Code ── */}
+        <div className="flex flex-col items-center px-5 pt-5 pb-4">
+          {qrPayload ? (
+            <div className="rounded-brutal border-2 border-brand-dark p-2 bg-white shadow-brutal-sm mb-4">
+              <QRCodeSVG
+                value={qrPayload}
+                size={240}
+                level="M"
+                includeMargin={false}
+                fgColor="#1a1209"
+              />
+            </div>
+          ) : (
+            <div className="w-[244px] h-[244px] rounded-brutal border-2 border-brand-dark/20 bg-brand-bg flex flex-col items-center justify-center gap-2 mb-4">
+              <span className="text-5xl">⏳</span>
+              <p className="font-sans text-xs text-brand-dark/50 text-center px-6">
+                QR appears during meal windows
               </p>
             </div>
           )}
 
           {/* Name + roll strip */}
+          {/* Name + roll */}
           <div className="w-full border-2 border-brand-dark rounded-brutal px-4 py-3 text-center bg-brand-bg shadow-brutal-sm">
             <p className="font-sans font-bold text-lg text-brand-dark leading-tight">
               {user?.displayName ?? 'Student'}
@@ -131,6 +208,9 @@ export default function TokenOverlay({ onClose }) {
         {/* ── Footer ── */}
         <div className="px-5 py-3 flex items-center justify-between">
           <p className="font-sans text-[9px] text-brand-dark/30 uppercase tracking-widest">GEC Sheikhpura</p>
+        {/* ── Footer ── */}
+        <div className="border-t-2 border-dashed border-brand-dark/15 px-5 py-2 flex items-center justify-between">
+          <p className="font-sans text-[9px] text-brand-dark/30 uppercase tracking-widest">GEC Sheikhpura Mess</p>
           <p className="font-mono text-[9px] text-brand-dark/30">{dateStr}</p>
         </div>
       </motion.div>
