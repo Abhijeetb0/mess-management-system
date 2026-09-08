@@ -281,7 +281,7 @@ export default function Terminal() {
     }
 
     const ctx = canvas.getContext('2d');
-    canvas.width = video.videoWidth;
+    canvas.width  = video.videoWidth;
     canvas.height = video.videoHeight;
     ctx.drawImage(video, 0, 0);
 
@@ -563,8 +563,8 @@ export default function Terminal() {
 
           {/* Camera error */}
           {camError && (
-            <div className="mx-4 mt-3 flex items-center gap-3 border-2 border-brand-dark rounded-brutal p-3 bg-brand-secondary">
-              <CameraOff size={18} className="shrink-0" />
+            <div className="mx-4 mt-4 rounded-brutal border-2 border-brand-dark bg-brand-secondary p-4 flex items-center gap-3">
+              <CameraOff size={20} className="shrink-0" />
               <p className="font-sans text-sm">{camError}</p>
             </div>
           )}
