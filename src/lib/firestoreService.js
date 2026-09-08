@@ -64,6 +64,10 @@ export const updateWallet = (uid, newBalance) =>
 
 /** Submit a new opt-out request */
 export const submitOptOut = async (uid, data) => {
+  // Same-day opt-out block — UI bypass ho tab bhi guard rahe
+  if (!data?.startDate || data.startDate <= TODAY()) {
+    throw new Error('SAME_DAY_NOT_ALLOWED');
+  }
   const ref = await addDoc(collection(db, 'optouts'), {
     uid,
     ...data,               // startDate, numDays, reason, docBase64, docFileName

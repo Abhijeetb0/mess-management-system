@@ -21,6 +21,15 @@ import { useAuth } from '../../context/AuthContext';
    ─ Records scan in /scans/{date}/{mealKey}/{uid}
 ───────────────────────────────────────────────────────── */
 
+const MEAL_WINDOWS = [
+  { key: 'breakfast', label: 'Breakfast', emoji: '☀️',  start: 8,  end: 10 },
+  { key: 'lunch',     label: 'Lunch',     emoji: '🌤️', start: 13, end: 15 },
+  { key: 'snacks',    label: 'Snacks',    emoji: '🫖',  start: 18, end: 19 },
+  { key: 'dinner',    label: 'Dinner',    emoji: '🌙',  start: 20, end: 22 },
+];
+
+function getCurrentMeal() {
+  const h = new Date().getHours();
 /* ─────────────────────────────────────────────────────────
    🔧 DEV TESTING — set the same value as in TokenOverlay.jsx
    to simulate a meal window in the scanner.
@@ -45,6 +54,10 @@ function parseQR(raw, today) {
   if (!raw?.startsWith('GECMESS|')) return null;
   const [, uid, date, mealKey] = raw.split('|');
   if (!uid || !date || !mealKey) return null;
+  if (date !== today)            return { error: 'QR is from a different day' };
+  const meal = MEAL_WINDOWS.find(m => m.key === mealKey);
+  if (!meal)                     return { error: 'Unknown meal type in QR' };
+  const h = new Date().getHours();
   if (date !== today) return { error: 'QR is from a different day' };
   const meal = MEAL_WINDOWS.find(m => m.key === mealKey);
   if (!meal) return { error: 'Unknown meal type in QR' };
@@ -58,6 +71,11 @@ function parseQR(raw, today) {
    Students Panel — shows scanned / not scanned / opted out
 ══════════════════════════════════════════════════════════ */
 function StudentsPanel({ today, currentMeal }) {
+  const [students,    setStudents]    = useState([]);
+  const [scanned,     setScanned]     = useState([]); // scan docs
+  const [optOutUIDs,  setOptOutUIDs]  = useState(new Set());
+  const [loading,     setLoading]     = useState(true);
+  const [tab,         setTab]         = useState('all'); // 'all'|'scanned'|'out'
   const [students, setStudents] = useState([]);
   const [scanned, setScanned] = useState([]); // scan docs
   const [optOutUIDs, setOptOutUIDs] = useState(new Set());
@@ -82,6 +100,16 @@ function StudentsPanel({ today, currentMeal }) {
     return () => unsub?.();
   }, [today, currentMeal]);
 
+  const scannedUIDs   = new Set(scanned.map(s => s.uid));
+  const approved      = students.filter(s => s.isApproved === true);
+  const notScanned    = approved.filter(s => !scannedUIDs.has(s.uid) && !optOutUIDs.has(s.uid));
+  const scannedList   = approved.filter(s => scannedUIDs.has(s.uid));
+  const optedOutList  = students.filter(s => optOutUIDs.has(s.uid));
+
+  const TABS = [
+    { key: 'all',     label: 'Not In Yet', count: notScanned.length,   list: notScanned,   color: 'bg-brand-primary'   },
+    { key: 'scanned', label: 'Scanned',    count: scannedList.length,  list: scannedList,  color: 'bg-brand-accent'    },
+    { key: 'out',     label: 'Opted Out',  count: optedOutList.length, list: optedOutList, color: 'bg-brand-secondary' },
   const scannedUIDs = new Set(scanned.map(s => s.uid));
   const approved = students.filter(s => s.isApproved === true);
   const notScanned = approved.filter(s => !scannedUIDs.has(s.uid) && !optOutUIDs.has(s.uid));
@@ -126,6 +154,9 @@ function StudentsPanel({ today, currentMeal }) {
         {active?.list.length === 0 ? (
           <BrutalCard className="p-6 text-center">
             <p className="font-sans text-sm text-brand-light">
+              {tab === 'all'     ? (currentMeal ? 'All students have entered!' : 'Meal not active yet')
+               : tab === 'scanned' ? 'No one scanned yet'
+               : 'No opt-outs today'}
               {tab === 'all' ? (currentMeal ? 'All students have entered!' : 'Meal not active yet')
                 : tab === 'scanned' ? 'No one scanned yet'
                   : 'No opt-outs today'}
@@ -158,6 +189,24 @@ function StudentsPanel({ today, currentMeal }) {
     </div>
   );
 }
+
+/* ══════════════════════════════════════════════════════════
+   Main Terminal
+══════════════════════════════════════════════════════════ */
+export default function Terminal() {
+  const { user, logout } = useAuth();
+  const [scanning,  setScanning]  = useState(false);
+  const [result,    setResult]    = useState(null);
+  const [camError,  setCamError]  = useState('');
+  const [tab,       setTab]       = useState('scan'); // 'scan' | 'students'
+
+  const today       = format(new Date(), 'yyyy-MM-dd');
+  const currentMeal = getCurrentMeal();
+
+  const videoRef  = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
+  const rafRef    = useRef(null);
 
 /* ══════════════════════════════════════════════════════════
    Main Terminal
@@ -221,6 +270,7 @@ export default function Terminal() {
   /* ── Scan loop ── */
   const scanLoop = useCallback(() => {
     if (!activeRef.current) return;
+    const video  = videoRef.current;
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas || video.readyState < 2) {
@@ -236,6 +286,56 @@ export default function Terminal() {
     if (code?.data) { onScan(code.data); return; }
     rafRef.current = requestAnimationFrame(scanLoop);
   }, []); // eslint-disable-line
+
+  /* ── On scan ── */
+  const onScan = useCallback(async (raw) => {
+    stopCamera();
+    const parsed = parseQR(raw, today);
+
+    if (!parsed) {
+      setResult({ status: 'invalid', message: 'Not a valid MessApp QR code.' });
+      setTimeout(() => setResult(null), 6000);
+      return;
+    }
+    if (parsed.error) {
+      setResult({ status: 'error', message: parsed.error });
+      setTimeout(() => setResult(null), 6000);
+      return;
+    }
+
+    const { uid, mealKey, meal } = parsed;
+
+    // Check opt-out
+    const optOutUIDs = await getTodayOptOutUIDs();
+    if (optOutUIDs.has(uid)) {
+      setResult({ status: 'denied', message: `Opted out — deny ${meal.label} entry.`, uid });
+      setTimeout(() => setResult(null), 7000);
+      return;
+    }
+
+    // Record the scan
+    try {
+      const profile = await import('../../lib/firestoreService')
+        .then(m => m.getUser(uid));
+      await recordScan(uid, mealKey, today, profile?.displayName || '', profile?.rollNumber || '');
+      setResult({
+        status: 'allowed',
+        message: `${meal.emoji} ${meal.label} entry allowed`,
+        name: profile?.displayName || uid,
+        roll: profile?.rollNumber || '',
+      });
+    } catch {
+      setResult({ status: 'allowed', message: `Entry allowed`, name: uid, roll: '' });
+    }
+    setTimeout(() => setResult(null), 6000);
+  }, [today, stopCamera]); // eslint-disable-line
+
+  /* ─── Result colours ─── */
+  const RESULT_STYLE = {
+    allowed: 'bg-brand-accent border-brand-dark',
+    denied:  'bg-brand-secondary border-brand-dark',
+    invalid: 'bg-brand-primary border-brand-dark',
+    error:   'bg-brand-primary border-brand-dark',
 
   /* ── On scan ── */
   const onScan = useCallback(async (raw) => {
@@ -352,6 +452,7 @@ export default function Terminal() {
               >
                 {result.status === 'allowed'
                   ? <CheckCircle size={28} className="text-green-700 shrink-0 mt-0.5" />
+                  : <XCircle    size={28} className="text-red-700 shrink-0 mt-0.5"   />}
                   : <XCircle size={28} className="text-red-700 shrink-0 mt-0.5" />}
                 <div>
                   <p className="font-serif font-bold text-base leading-tight">{result.message}</p>
@@ -379,12 +480,15 @@ export default function Terminal() {
               className="w-full aspect-square object-cover rounded-brutal border-2 border-brand-dark bg-brand-dark"
             />
             {/* Corners */}
+            {[['top-2 left-2','border-t-4 border-l-4'],['top-2 right-2','border-t-4 border-r-4'],
+              ['bottom-2 left-2','border-b-4 border-l-4'],['bottom-2 right-2','border-b-4 border-r-4']].map(([p,b],i)=>(
             {[['top-2 left-2', 'border-t-4 border-l-4'], ['top-2 right-2', 'border-t-4 border-r-4'],
             ['bottom-2 left-2', 'border-b-4 border-l-4'], ['bottom-2 right-2', 'border-b-4 border-r-4']].map(([p, b], i) => (
               <div key={i} className={`absolute ${p} w-8 h-8 ${b} border-brand-gold rounded-sm`} />
             ))}
             <motion.div
               className="absolute left-3 right-3 h-0.5 bg-brand-gold/70 rounded"
+              animate={{ top: ['8%','92%','8%'] }}
               animate={{ top: ['8%', '92%', '8%'] }}
               transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}
             />
@@ -396,6 +500,10 @@ export default function Terminal() {
             <div className="flex-1 flex flex-col items-center justify-center px-6 pb-8">
               <div className="w-36 h-36 border-2 border-brand-dark/20 rounded-brutal bg-brand-bg flex items-center justify-center mb-5 relative overflow-hidden">
                 <motion.div className="absolute left-0 right-0 h-0.5 bg-brand-dark/20"
+                  animate={{ top: ['10%','90%','10%'] }}
+                  transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }} />
+                {[['top-2 left-2','border-t-2 border-l-2'],['top-2 right-2','border-t-2 border-r-2'],
+                  ['bottom-2 left-2','border-b-2 border-l-2'],['bottom-2 right-2','border-b-2 border-r-2']].map(([p,b],i)=>(
                   animate={{ top: ['10%', '90%', '10%'] }}
                   transition={{ duration: 2.5, repeat: Infinity, ease: 'linear' }} />
                 {[['top-2 left-2', 'border-t-2 border-l-2'], ['top-2 right-2', 'border-t-2 border-r-2'],

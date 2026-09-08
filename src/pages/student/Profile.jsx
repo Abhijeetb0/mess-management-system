@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { LogOut, Wallet, Clock, CheckCircle2, XCircle, ArrowLeftRight } from 'lucide-react';
+import { LogOut, Wallet, Clock, CheckCircle2, XCircle, ArrowLeftRight, FileText, Eye, X } from 'lucide-react';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
@@ -19,10 +19,38 @@ const STATUS_CONF = {
   rejected: { label: 'Rejected', color: 'bg-brand-secondary', Icon: XCircle      },
 };
 
+function DocViewModal({ base64, name, onClose }) {
+  return (
+    <div className="fixed inset-0 bg-brand-dark/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="bg-brand-bg border-2 border-brand-dark rounded-brutal shadow-brutal-lg p-5 w-full max-w-lg max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between mb-3 gap-2">
+          <p className="font-sans font-bold text-sm truncate">{name || 'Document'}</p>
+          <button onClick={onClose} aria-label="Close"><X size={18} /></button>
+        </div>
+        <div className="flex-1 overflow-auto">
+          {base64?.startsWith('data:image') ? (
+            <img src={base64} alt={name} className="w-full rounded" />
+          ) : base64?.startsWith('data:application/pdf') ? (
+            <iframe src={base64} title={name} className="w-full h-[60vh] border rounded" />
+          ) : base64 ? (
+            <div className="text-center py-10">
+              <p className="font-sans text-sm text-brand-light mb-3">Preview not available for this file type.</p>
+              <a href={base64} download={name || 'document'} className="font-sans text-xs font-bold underline">Download file</a>
+            </div>
+          ) : (
+            <p className="font-sans text-sm text-brand-light text-center py-10">No document attached.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Profile({ direction }) {
   const { user, logout, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
+  const [docView, setDocView] = useState(null);
 
   const isStaff    = user?.role === 'committee'; // admin accounts are separate — no switch needed
   const panelPath  = '/committee';
@@ -134,24 +162,38 @@ export default function Profile({ direction }) {
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.05 }}
             >
-              <BrutalCard className="p-4 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-3">
-                  <conf.Icon size={18} className="text-brand-dark shrink-0" />
-                  <div>
-                    <p className="font-sans font-bold text-sm">
-                      {r.numDays} day{r.numDays > 1 ? 's' : ''} from {r.startDate}
-                    </p>
-                    <p className="font-sans text-xs text-brand-light truncate max-w-[160px]">
-                      {r.reason}
-                    </p>
+              <BrutalCard className="p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3">
+                    <conf.Icon size={18} className="text-brand-dark shrink-0" />
+                    <div>
+                      <p className="font-sans font-bold text-sm">
+                        {r.numDays} day{r.numDays > 1 ? 's' : ''} from {r.startDate}
+                      </p>
+                      <p className="font-sans text-xs text-brand-light truncate max-w-[160px]">
+                        {r.reason}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <BrutalBadge color={conf.color}>{conf.label}</BrutalBadge>
+                    {r.status === 'approved' && (
+                      <span className="font-serif font-bold text-sm text-brand-gold">+₹{r.estimatedRefund}</span>
+                    )}
                   </div>
                 </div>
-                <div className="flex flex-col items-end gap-1 shrink-0">
-                  <BrutalBadge color={conf.color}>{conf.label}</BrutalBadge>
-                  {r.status === 'approved' && (
-                    <span className="font-serif font-bold text-sm text-brand-gold">+₹{r.estimatedRefund}</span>
-                  )}
-                </div>
+                {r.docBase64 && (
+                  <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-dark/10">
+                    <FileText size={13} className="text-brand-dark/60 shrink-0" />
+                    <span className="font-sans text-xs truncate max-w-[150px]">{r.docFileName || 'Document'}</span>
+                    <button
+                      onClick={() => setDocView({ base64: r.docBase64, name: r.docFileName })}
+                      className="flex items-center gap-1 font-sans text-xs font-semibold text-brand-light hover:text-brand-dark ml-auto"
+                    >
+                      <Eye size={12} /> View
+                    </button>
+                  </div>
+                )}
               </BrutalCard>
             </motion.div>
           );
@@ -162,6 +204,8 @@ export default function Profile({ direction }) {
       <BrutalButton icon={LogOut} onClick={logout} variant="ghost" fullWidth>
         Sign Out
       </BrutalButton>
+
+      {docView && <DocViewModal {...docView} onClose={() => setDocView(null)} />}
 
     </AnimatedPage>
   );
