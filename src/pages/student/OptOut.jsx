@@ -6,7 +6,7 @@ import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton } from '../../components/ui';
 import { Toast } from '../../components/Feedback';
 import { useAuth } from '../../context/AuthContext';
-import { submitOptOut, listenMyOptOuts } from '../../lib/firestoreService';
+import { submitOptOut, listenMyOptOuts, cancelOptOut, getOptOutEndDate } from '../../lib/firestoreService';
 
 /* ─────────────────────────────────────────────────────────
    Student — Opt-Out Page (Phase 2: writes to Firestore)
@@ -16,8 +16,6 @@ import { submitOptOut, listenMyOptOuts } from '../../lib/firestoreService';
 const REFUND_PER_DAY = 100;
 const getTodayISO = () => format(new Date(), 'yyyy-MM-dd');
 const getTomorrowISO = () => format(addDays(new Date(), 1), 'yyyy-MM-dd');
-const TODAY_ISO = getTodayISO();
-const TOMORROW_ISO = getTomorrowISO();
 const DAYS_OPTIONS = [1,2,3,4,5,6,7,10,14,21,30];
 
 function useDeadlineLock() {
@@ -44,6 +42,16 @@ const STATUS_COLOR = {
   pending:  'bg-brand-purple',
   approved: 'bg-brand-accent',
   rejected: 'bg-brand-secondary',
+  cancelled: 'bg-brand-bg',
+};
+
+const fmtRange = (startDate, numDays) => {
+  if (!startDate) return '';
+  try {
+    const end = getOptOutEndDate(startDate, numDays);
+    const f = (iso) => format(new Date(iso + 'T00:00:00'), 'dd MMM');
+    return startDate === end ? f(startDate) : `${f(startDate)} → ${f(end)}`;
+  } catch { return startDate; }
 };
 
 function DocViewModal({ base64, name, onClose }) {
@@ -86,6 +94,7 @@ export default function OptOut({ direction }) {
   const [errors,    setErrors]    = useState({});
   const [history,   setHistory]   = useState([]);
   const [docView, setDocView] = useState(null);
+  const [cancelling, setCancelling] = useState(null);
   const [toast, setToast] = useState({ visible: false, message: '', type: 'success' });
 
   const showToast = (message, type = 'success') => {
@@ -151,7 +160,11 @@ export default function OptOut({ direction }) {
       setStartDate(getTomorrowISO());
       setErrors({});
     } catch (err) {
-      showToast(err?.message === 'SAME_DAY_NOT_ALLOWED' ? 'Same-day opt-out is not allowed. Select tomorrow or later.' : 'Failed to submit. Check your connection.', 'error');
+      if (err?.message === 'SAME_DAY_NOT_ALLOWED') showToast('Same-day opt-out is not allowed. Select tomorrow or later.', 'error');
+      else if (err?.message === 'OVERLAP_EXISTS') showToast(`Is range me already request hai (${err.clash?.startDate}, ${err.clash?.status}).`, 'error');
+      else if (err?.message === 'INVALID_DAYS') showToast('Days 1–30 ke beech hone chahiye.', 'error');
+      else if (err?.message === 'REASON_REQUIRED') showToast('Please provide a reason.', 'error');
+      else showToast('Failed to submit. Check your connection.', 'error');
       console.error(err);
     } finally {
       setSubmitting(false);
@@ -196,11 +209,12 @@ export default function OptOut({ direction }) {
                 <BrutalCard key={r.id} className="p-4">
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="font-sans font-bold text-sm">{r.numDays} day(s) from {r.startDate}</p>
+                      <p className="font-sans font-bold text-sm">{r.numDays} day(s) · {fmtRange(r.startDate, r.numDays)}</p>
+                      <p className="font-mono text-[11px] text-brand-light mt-0.5">from {r.startDate}</p>
                       <p className="font-sans text-xs text-brand-light mt-0.5 truncate max-w-[180px]">{r.reason}</p>
                     </div>
                     <div className="flex flex-col items-end gap-1">
-                      <span className={`font-sans text-[10px] font-bold px-2 py-0.5 rounded-pill border border-brand-dark/20 ${STATUS_COLOR[r.status]}`}>
+                      <span className={`font-sans text-[10px] font-bold px-2 py-0.5 rounded-pill border border-brand-dark/20 ${STATUS_COLOR[r.status] || STATUS_COLOR.pending}`}>
                         {r.status}
                       </span>
                       {r.status === 'approved' && (
@@ -208,15 +222,52 @@ export default function OptOut({ direction }) {
                       )}
                     </div>
                   </div>
+                  {r.status === 'rejected' && r.rejectReason && (
+                    <p className="font-sans text-xs text-red-700 bg-red-50 border border-red-200 rounded-brutal px-2.5 py-1.5 mt-3">
+                      Reason: {r.rejectReason}
+                    </p>
+                  )}
                   {r.docBase64 && (
                     <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-dark/10">
                       <FileText size={13} className="text-brand-dark/60 shrink-0" />
-                      <span className="font-sans text-xs truncate max-w-[150px]">{r.docFileName || 'Document'}</span>
+                      <span className="font-sans text-xs truncate max-w-[120px]">{r.docFileName || 'Document'}</span>
                       <button
                         onClick={() => setDocView({ base64: r.docBase64, name: r.docFileName })}
                         className="flex items-center gap-1 font-sans text-xs font-semibold text-brand-light hover:text-brand-dark ml-auto"
                       >
                         <Eye size={12} /> View
+                      </button>
+                      {r.status === 'pending' && (
+                        <button
+                          disabled={cancelling === r.id}
+                          onClick={async () => {
+                            if (!window.confirm('Apni pending request cancel karein?')) return;
+                            setCancelling(r.id);
+                            try { await cancelOptOut(r.id); showToast('Request cancelled.'); }
+                            catch { showToast('Cancel failed. Try again.', 'error'); }
+                            finally { setCancelling(null); }
+                          }}
+                          className="font-sans text-xs font-bold text-red-600 hover:underline disabled:opacity-50"
+                        >
+                          {cancelling === r.id ? '…' : 'Cancel'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {r.status === 'pending' && !r.docBase64 && (
+                    <div className="mt-3 pt-3 border-t border-brand-dark/10 flex justify-end">
+                      <button
+                        disabled={cancelling === r.id}
+                        onClick={async () => {
+                          if (!window.confirm('Apni pending request cancel karein?')) return;
+                          setCancelling(r.id);
+                          try { await cancelOptOut(r.id); showToast('Request cancelled.'); }
+                          catch { showToast('Cancel failed. Try again.', 'error'); }
+                          finally { setCancelling(null); }
+                        }}
+                        className="font-sans text-xs font-bold text-red-600 hover:underline disabled:opacity-50"
+                      >
+                        {cancelling === r.id ? '…' : 'Cancel request'}
                       </button>
                     </div>
                   )}
@@ -247,9 +298,12 @@ export default function OptOut({ direction }) {
                 <label className="flex items-center gap-1.5 font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5">
                   <Calendar size={13} /> Start Date
                 </label>
-                <input type="date" value={startDate} min={TOMORROW_ISO} onChange={e => setStartDate(e.target.value)}
+                <input type="date" value={startDate} min={getTomorrowISO()} onChange={e => setStartDate(e.target.value)}
                   className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none focus:shadow-brutal-sm" />
                 {errors.startDate && <p className="font-sans text-xs text-red-600 mt-1">{errors.startDate}</p>}
+                {!errors.startDate && startDate && (
+                  <p className="font-sans text-xs text-brand-light mt-1">Leave range: <span className="font-bold text-brand-dark">{fmtRange(startDate, numDays)}</span></p>
+                )}
               </div>
 
               {/* Days */}
@@ -262,7 +316,7 @@ export default function OptOut({ direction }) {
                   {DAYS_OPTIONS.map(d => <option key={d} value={d}>{d} {d === 1 ? 'day' : 'days'}</option>)}
                 </select>
                 <p className="font-sans text-xs text-brand-gold font-semibold mt-1.5">
-                  Estimated refund: ₹{estimatedRefund}
+                  Estimated refund: ₹{estimatedRefund} · {fmtRange(startDate, numDays)}
                 </p>
               </div>
 
@@ -379,6 +433,19 @@ export default function OptOut({ direction }) {
                 <p className="font-sans text-[10px] text-brand-dark mt-5 max-w-[220px]">
                   Waiting for committee approval. You will receive <span className="font-bold text-brand-dark">₹{pendingReq.estimatedRefund}</span> in your wallet if approved.
                 </p>
+                <button
+                  disabled={cancelling === pendingReq.id}
+                  onClick={async () => {
+                    if (!window.confirm('Apni pending request cancel karein?')) return;
+                    setCancelling(pendingReq.id);
+                    try { await cancelOptOut(pendingReq.id); showToast('Request cancelled.'); }
+                    catch { showToast('Cancel failed. Try again.', 'error'); }
+                    finally { setCancelling(null); }
+                  }}
+                  className="mt-3 font-sans text-xs font-bold text-brand-dark/70 underline hover:text-brand-dark disabled:opacity-50"
+                >
+                  {cancelling === pendingReq.id ? 'Cancelling…' : 'Cancel this request'}
+                </button>
               </div>
             </BrutalCard>
           </motion.div>

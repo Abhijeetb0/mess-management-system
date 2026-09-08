@@ -4,7 +4,7 @@ import { LogOut, Wallet, Clock, CheckCircle2, XCircle, ArrowLeftRight, FileText,
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
 import { useAuth } from '../../context/AuthContext';
-import { listenMyOptOuts } from '../../lib/firestoreService';
+import { listenMyOptOuts, listenMyPenalties, getOptOutEndDate } from '../../lib/firestoreService';
 import { QRCodeSVG } from 'qrcode.react';
 import { useNavigate } from 'react-router-dom';
 
@@ -17,6 +17,7 @@ const STATUS_CONF = {
   pending:  { label: 'Pending',  color: 'bg-brand-purple',    Icon: Clock        },
   approved: { label: 'Approved', color: 'bg-brand-accent',    Icon: CheckCircle2 },
   rejected: { label: 'Rejected', color: 'bg-brand-secondary', Icon: XCircle      },
+  cancelled: { label: 'Cancelled', color: 'bg-brand-bg',      Icon: XCircle      },
 };
 
 function DocViewModal({ base64, name, onClose }) {
@@ -50,6 +51,7 @@ export default function Profile({ direction }) {
   const { user, logout, refreshProfile } = useAuth();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
+  const [penalties, setPenalties] = useState([]);
   const [docView, setDocView] = useState(null);
 
   const isStaff    = user?.role === 'committee'; // admin accounts are separate — no switch needed
@@ -65,8 +67,19 @@ export default function Profile({ direction }) {
     return () => unsub?.();
   }, [user?.uid]);
 
-  const totalSaved = history
-    .filter(r => r.status === 'approved')
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsub = listenMyPenalties(user.uid, setPenalties);
+    return () => unsub?.();
+  }, [user?.uid]);
+
+  const approved = history.filter(r => r.status === 'approved');
+  const pending = history.filter(r => r.status === 'pending');
+  const totalSaved = approved.reduce((sum, r) => sum + (r.estimatedRefund || 0), 0);
+  const pendingTotal = pending.reduce((sum, r) => sum + (r.estimatedRefund || 0), 0);
+  const monthPrefix = new Date().toISOString().slice(0, 7); // yyyy-MM
+  const monthSaved = approved
+    .filter(r => (r.startDate || '').startsWith(monthPrefix))
     .reduce((sum, r) => sum + (r.estimatedRefund || 0), 0);
 
   return (
@@ -130,7 +143,21 @@ export default function Profile({ direction }) {
         </BrutalCard>
       </div>
 
-      {/* Inline QR Code */}
+      {/* Refund split chips */}
+      <div className="grid grid-cols-3 gap-2 mb-5">
+        <BrutalCard className="p-3 text-center">
+          <p className="font-sans text-[10px] text-brand-light uppercase tracking-wider">Pending</p>
+          <p className="font-serif font-bold text-lg text-brand-dark">₹{pendingTotal}</p>
+        </BrutalCard>
+        <BrutalCard className="p-3 text-center">
+          <p className="font-sans text-[10px] text-brand-light uppercase tracking-wider">Credited</p>
+          <p className="font-serif font-bold text-lg text-brand-gold">₹{totalSaved}</p>
+        </BrutalCard>
+        <BrutalCard className="p-3 text-center">
+          <p className="font-sans text-[10px] text-brand-light uppercase tracking-wider">This month</p>
+          <p className="font-serif font-bold text-lg text-brand-dark">₹{monthSaved}</p>
+        </BrutalCard>
+      </div>
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -168,7 +195,7 @@ export default function Profile({ direction }) {
                     <conf.Icon size={18} className="text-brand-dark shrink-0" />
                     <div>
                       <p className="font-sans font-bold text-sm">
-                        {r.numDays} day{r.numDays > 1 ? 's' : ''} from {r.startDate}
+                        {r.numDays} day{r.numDays > 1 ? 's' : ''} · {r.startDate} → {getOptOutEndDate(r.startDate, r.numDays)}
                       </p>
                       <p className="font-sans text-xs text-brand-light truncate max-w-[160px]">
                         {r.reason}
@@ -182,6 +209,11 @@ export default function Profile({ direction }) {
                     )}
                   </div>
                 </div>
+                {r.status === 'rejected' && r.rejectReason && (
+                  <p className="font-sans text-xs text-red-700 bg-red-50 border border-red-200 rounded-brutal px-2.5 py-1.5 mt-3">
+                    Reject reason: {r.rejectReason}
+                  </p>
+                )}
                 {r.docBase64 && (
                   <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-dark/10">
                     <FileText size={13} className="text-brand-dark/60 shrink-0" />
@@ -199,6 +231,31 @@ export default function Profile({ direction }) {
           );
         })}
       </div>
+
+      {/* My penalties (wallet kata to reason yahi dikhega) */}
+      {penalties.length > 0 && (
+        <>
+          <h3 className="font-serif font-bold text-lg mb-3">My Penalties</h3>
+          <div className="flex flex-col gap-2 mb-6">
+            {penalties.map((p) => (
+              <BrutalCard key={p.id} color={p.resolved ? 'bg-brand-accent/60' : 'bg-brand-secondary'} className="p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="font-sans font-bold text-sm">−₹{p.amount} · {p.reason}</p>
+                    <p className="font-sans text-[11px] text-brand-dark/60 mt-0.5">
+                      By {p.appliedBy || 'Committee'}
+                      {p.appliedAt?.toDate ? ` · ${new Date(p.appliedAt.toDate()).toLocaleDateString('en-IN')}` : ''}
+                    </p>
+                  </div>
+                  <BrutalBadge color={p.resolved ? 'bg-brand-accent' : 'bg-brand-secondary'}>
+                    {p.resolved ? 'Resolved' : 'Active'}
+                  </BrutalBadge>
+                </div>
+              </BrutalCard>
+            ))}
+          </div>
+        </>
+      )}
 
       {/* Logout */}
       <BrutalButton icon={LogOut} onClick={logout} variant="ghost" fullWidth>

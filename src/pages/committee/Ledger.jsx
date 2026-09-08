@@ -1,10 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, XCircle, AlertTriangle, Printer, FileText, Calendar, Eye, X, ChevronDown, CheckCheck, Trash2 } from 'lucide-react';
+import { CheckCircle, XCircle, AlertTriangle, FileText, Calendar, Eye, X, ChevronDown, CheckCheck, Trash2, Search, ShieldAlert } from 'lucide-react';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalButton, BrutalBadge } from '../../components/ui';
-import { QRCodeSVG } from 'qrcode.react';
-import { listenPendingOptOuts, listenAllOptOuts, approveOptOut, rejectOptOut, getUser, applyPenalty, listenPenalties, resolvePenalty, removePenalty } from '../../lib/firestoreService';
+import { listenPendingOptOuts, listenAllOptOuts, listenViolations, approveOptOut, rejectOptOut, applyPenalty, listenPenalties, resolvePenalty, removePenalty, getOptOutEndDate, getUserByRollNumber } from '../../lib/firestoreService';
 import { useAuth } from '../../context/AuthContext';
 
 /* ─────────────────────────────────────────────────────────
@@ -36,12 +35,42 @@ function DocViewModal({ base64, name, onClose }) {
   );
 }
 
+function RejectModal({ request, onClose, onConfirm, busy }) {
+  const [reason, setReason] = useState('');
+  const [error, setError] = useState('');
+  return (
+    <div className="fixed inset-0 bg-brand-dark/60 z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} className="bg-brand-bg border-2 border-brand-dark rounded-brutal shadow-brutal-lg p-5 w-full max-w-md">
+        <h4 className="font-serif font-bold text-lg mb-1">Reject request?</h4>
+        <p className="font-sans text-xs text-brand-light mb-3">{request?.studentName} · {request?.rollNumber} · {request?.numDays}d from {request?.startDate}</p>
+        <label className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light">Reason (mandatory)</label>
+        <textarea value={reason} onChange={e => { setReason(e.target.value); setError(''); }} rows={3}
+          placeholder="e.g. Document unclear, dates overlap..."
+          className="mt-1.5 w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-white outline-none resize-none" />
+        {error && <p className="font-sans text-xs text-red-600 mt-1">{error}</p>}
+        <div className="flex gap-2 mt-4">
+          <BrutalButton variant="ghost" fullWidth onClick={onClose}>Cancel</BrutalButton>
+          <BrutalButton variant="danger" fullWidth disabled={busy}
+            onClick={() => {
+              if (!reason.trim()) { setError('Reject reason dena mandatory hai.'); return; }
+              onConfirm(reason.trim());
+            }}>
+            {busy ? '…' : 'Reject'}
+          </BrutalButton>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Ledger() {
   const [requests, setRequests] = useState([]);
   const [processed, setProcessed] = useState([]);
+  const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showPrint, setShowPrint] = useState(false);
+  const [search, setSearch] = useState('');
   const [processing, setProcessing] = useState({});
+  const [rejectTarget, setRejectTarget] = useState(null);
   const [docView, setDocView] = useState(null);
   const [penaltyUid, setPenaltyUid] = useState('');
   const [penaltyAmt, setPenaltyAmt] = useState('');
@@ -60,21 +89,28 @@ export default function Ledger() {
     });
     const unsub2 = listenPenalties(setPenalties);
     const unsub3 = listenAllOptOuts((all) => {
-      setProcessed(all.filter(r => r.status === 'approved' || r.status === 'rejected').slice(0, 30));
-    });
-    return () => { unsub1?.(); unsub2?.(); unsub3?.(); };
+      setProcessed(all.filter(r => ['approved', 'rejected', 'cancelled'].includes(r.status)).slice(0, 50));
+    }, 60);
+    const unsub4 = listenViolations(setViolations, 20);
+    return () => { unsub1?.(); unsub2?.(); unsub3?.(); unsub4?.(); };
   }, []);
+
+  const matchesSearch = (r) => {
+    const s = search.trim().toLowerCase();
+    if (!s) return true;
+    return (r.studentName || '').toLowerCase().includes(s) || (r.rollNumber || '').toLowerCase().includes(s);
+  };
+  const filteredRequests = useMemo(() => requests.filter(matchesSearch), [requests, search]);
+  const filteredProcessed = useMemo(() => processed.filter(matchesSearch), [processed, search]);
 
   const handleApprove = async (r) => {
     if (processing[r.id]) return;
     setProcessing(p => ({ ...p, [r.id]: true }));
     try {
-      // Get current wallet balance
-      const student = await getUser(r.uid);
       await approveOptOut(r.id, {
         uid: r.uid,
         refundAmount: r.estimatedRefund || 0,
-        currentBalance: student?.walletBalance || 0,
+        processedBy: user?.displayName || user?.rollNumber || 'Committee',
       });
     } catch (err) {
       console.error('Approve failed:', err);
@@ -83,11 +119,13 @@ export default function Ledger() {
     }
   };
 
-  const handleReject = async (r) => {
-    if (processing[r.id]) return;
+  const handleRejectConfirm = async (reason) => {
+    const r = rejectTarget;
+    if (!r || processing[r.id]) return;
     setProcessing(p => ({ ...p, [r.id]: true }));
     try {
-      await rejectOptOut(r.id);
+      await rejectOptOut(r.id, reason, user?.displayName || user?.rollNumber || 'Committee');
+      setRejectTarget(null);
     } catch (err) {
       console.error('Reject failed:', err);
     } finally {
@@ -97,7 +135,7 @@ export default function Ledger() {
 
   return (
     <AnimatedPage direction={1} className="p-8">
-      <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div>
           <h2 className="font-serif font-bold text-3xl">
             Opt-Out <span className="highlight">Requests</span>
@@ -106,21 +144,23 @@ export default function Ledger() {
             {loading ? 'Loading...' : `${requests.length} pending approval`}
           </p>
         </div>
-        {/* <BrutalButton icon={Printer} onClick={() => setShowPrint(true)} variant="secondary">
-          Print Passes
-        </BrutalButton> */}
+      </div>
+      <div className="relative max-w-3xl mb-4">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-light" />
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name or roll no…"
+          className="w-full border-2 border-brand-dark rounded-brutal pl-9 pr-3 py-2.5 font-sans text-sm bg-brand-bg outline-none" />
       </div>
 
       {/* Request cards */}
       <div className="flex flex-col gap-4 mb-10 max-w-3xl">
         <AnimatePresence>
-          {!loading && requests.length === 0 && (
+          {!loading && filteredRequests.length === 0 && (
             <BrutalCard className="p-8 text-center">
               <p className="text-3xl mb-2">🎉</p>
-              <p className="font-sans text-sm text-brand-light">All caught up! No pending requests.</p>
+              <p className="font-sans text-sm text-brand-light">{requests.length === 0 ? 'All caught up! No pending requests.' : 'No matches found.'}</p>
             </BrutalCard>
           )}
-          {requests.map((r, i) => (
+          {filteredRequests.map((r, i) => (
             <motion.div
               key={r.id}
               initial={{ opacity: 0, y: 16 }}
@@ -149,8 +189,8 @@ export default function Ledger() {
                   <div className="flex items-center gap-2 bg-brand-primary/30 rounded-brutal px-3 py-2">
                     <Calendar size={13} className="shrink-0" />
                     <div>
-                      <p className="font-sans text-[10px] text-brand-light">Start Date</p>
-                      <p className="font-sans font-semibold text-xs">{r.startDate}</p>
+                      <p className="font-sans text-[10px] text-brand-light">Range</p>
+                      <p className="font-sans font-semibold text-xs">{r.startDate} → {getOptOutEndDate(r.startDate, r.numDays)}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 bg-brand-accent/30 rounded-brutal px-3 py-2">
@@ -197,7 +237,7 @@ export default function Ledger() {
                   <BrutalButton
                     variant="danger" icon={XCircle} fullWidth
                     disabled={!!processing[r.id]}
-                    onClick={() => handleReject(r)}
+                    onClick={() => setRejectTarget(r)}
                   >
                     Reject
                   </BrutalButton>
@@ -208,23 +248,28 @@ export default function Ledger() {
         </AnimatePresence>
       </div>
 
-      {/* Refund status history — approve/reject ke baad bhi doc accessible */}
+      {/* Refund status history — approve/reject/cancel ke baad bhi doc accessible */}
       <h3 className="font-serif font-bold text-xl mb-3">Refund Status History</h3>
       <div className="flex flex-col gap-2 max-w-3xl mb-10">
-        {processed.length === 0 ? (
+        {filteredProcessed.length === 0 ? (
           <BrutalCard className="p-5 text-center">
             <p className="font-sans text-sm text-brand-light">No processed requests yet.</p>
           </BrutalCard>
         ) : (
-          processed.map((r) => (
+          filteredProcessed.map((r) => (
             <BrutalCard key={r.id} className="p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-sans font-bold text-sm">{r.studentName || 'Unknown'} <span className="font-mono font-normal text-xs text-brand-light">· {r.rollNumber}</span></p>
-                  <p className="font-sans text-xs text-brand-light mt-0.5">{r.numDays} day{r.numDays > 1 ? 's' : ''} from {r.startDate} · ₹{r.estimatedRefund || 0}</p>
+                  <p className="font-sans text-xs text-brand-light mt-0.5">{r.numDays} day{r.numDays > 1 ? 's' : ''} · {r.startDate} → {getOptOutEndDate(r.startDate, r.numDays)} · ₹{r.estimatedRefund || 0}</p>
                 </div>
-                <BrutalBadge color={r.status === 'approved' ? 'bg-brand-accent' : 'bg-brand-secondary'}>{r.status}</BrutalBadge>
+                <BrutalBadge color={r.status === 'approved' ? 'bg-brand-accent' : r.status === 'cancelled' ? 'bg-brand-bg' : 'bg-brand-secondary'}>{r.status}</BrutalBadge>
               </div>
+              {r.status === 'rejected' && r.rejectReason && (
+                <p className="font-sans text-xs text-red-700 bg-red-50 border border-red-200 rounded-brutal px-2.5 py-1.5 mt-3">
+                  Reject reason: {r.rejectReason}
+                </p>
+              )}
               {r.docBase64 && (
                 <div className="flex items-center gap-2 mt-3 pt-3 border-t border-brand-dark/10">
                   <FileText size={13} className="text-brand-dark/60 shrink-0" />
@@ -237,6 +282,45 @@ export default function Ledger() {
                   </button>
                 </div>
               )}
+            </BrutalCard>
+          ))
+        )}
+      </div>
+
+      {/* Gate violations — denied entry attempts (opted-out ne khane ki try ki) */}
+      <h3 className="font-serif font-bold text-xl mb-3 flex items-center gap-2">
+        <ShieldAlert size={18} /> Gate Violations
+        {violations.length > 0 && (
+          <span className="font-sans text-xs font-bold bg-brand-secondary border-2 border-brand-dark px-2 py-0.5 rounded-pill">{violations.length}</span>
+        )}
+      </h3>
+      <div className="flex flex-col gap-2 max-w-3xl mb-10">
+        {violations.length === 0 ? (
+          <BrutalCard className="p-5 text-center">
+            <p className="font-sans text-sm text-brand-light">No violation attempts logged. 🎉</p>
+          </BrutalCard>
+        ) : (
+          violations.map((v) => (
+            <BrutalCard key={v.id} color="bg-brand-secondary" className="p-4">
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div>
+                  <p className="font-sans font-bold text-sm">{v.studentName || v.uid} <span className="font-mono font-normal text-xs text-brand-light">· {v.rollNumber}</span></p>
+                  <p className="font-sans text-xs text-brand-dark/70 mt-0.5">
+                    Tried {v.mealKey} on {v.date}
+                    {v.attemptedAt?.toDate ? ` · ${new Date(v.attemptedAt.toDate()).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}` : ''}
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setPenaltyUid(v.rollNumber || '');
+                    setPenaltyReason(`Eating attempt during opt-out (${v.mealKey} ${v.date})`);
+                    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+                  }}
+                  className="font-sans font-bold text-xs px-3 py-2 rounded-brutal border-2 border-brand-dark bg-white hover:shadow-brutal-sm transition-shadow"
+                >
+                  Prefill penalty →
+                </button>
+              </div>
             </BrutalCard>
           ))
         )}
@@ -267,10 +351,7 @@ export default function Ledger() {
               setPenaltyBusy(true);
               setPenaltyError('');
               try {
-                // Find student by roll number
-                const { getAllStudents } = await import('../../lib/firestoreService');
-                const all = await getAllStudents();
-                const student = all.find(s => s.rollNumber?.toLowerCase() === penaltyUid.trim().toLowerCase());
+                const student = await getUserByRollNumber(penaltyUid);
                 if (!student) { setPenaltyError('Student not found with that roll number.'); return; }
                 await applyPenalty(student.uid, {
                   amount: amt,
@@ -422,8 +503,12 @@ export default function Ledger() {
         )}
       </div>
 
-      {/* Doc view modal */}
+      {/* Doc view modal + reject modal */}
       {docView && <DocViewModal {...docView} onClose={() => setDocView(null)} />}
+      {rejectTarget && (
+        <RejectModal request={rejectTarget} busy={!!processing[rejectTarget.id]}
+          onClose={() => setRejectTarget(null)} onConfirm={handleRejectConfirm} />
+      )}
     </AnimatedPage>
   );
 }

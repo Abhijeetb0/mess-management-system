@@ -4,13 +4,30 @@
 // ─────────────────────────────────────────────────────────
 import {
   doc, getDoc, setDoc, addDoc, updateDoc, deleteDoc,
-  collection, query, where, orderBy, onSnapshot,
-  serverTimestamp, getDocs,
+  collection, query, where, orderBy, onSnapshot, limit,
+  serverTimestamp, getDocs, runTransaction,
 } from 'firebase/firestore';
 import { db } from './firebase';
-import { format } from 'date-fns';
+import { format, addDays, parseISO } from 'date-fns';
 
 const TODAY = () => format(new Date(), 'yyyy-MM-dd');
+
+/* ── Opt-out date helpers (shared by UI + gate) ──────────── */
+// ISO yyyy-MM-dd strings compare lexically, so range checks are safe.
+export const getOptOutEndDate = (startDate, numDays) => {
+  try {
+    return format(addDays(parseISO(startDate), Math.max(1, Number(numDays) || 1) - 1), 'yyyy-MM-dd');
+  } catch {
+    return startDate;
+  }
+};
+export const isDateInOptOutRange = (dateISO, startDate, numDays) => {
+  if (!dateISO || !startDate) return false;
+  const end = getOptOutEndDate(startDate, numDays);
+  return startDate <= dateISO && dateISO <= end;
+};
+export const rangesOverlap = (aStart, aEnd, bStart, bEnd) =>
+  aStart <= bEnd && bStart <= aEnd;
 
 /* ── Users ──────────────────────────────────────────────── */
 
@@ -60,13 +77,45 @@ export const setUserRole = (uid, role) =>
 export const updateWallet = (uid, newBalance) =>
   updateDoc(doc(db, 'users', uid), { walletBalance: newBalance, updatedAt: serverTimestamp() });
 
+/** Find a student by roll number (case-insensitive) — worker fallback + penalty form */
+export const getUserByRollNumber = async (rollNumber) => {
+  const clean = (rollNumber || '').trim().toLowerCase();
+  if (!clean) return null;
+  const all = await getAllStudents();
+  return all.find(s => (s.rollNumber || '').toLowerCase() === clean) || null;
+};
+
 /* ── Opt-Out Requests ───────────────────────────────────── */
+
+/** Check if a new range overlaps the student's pending/approved requests */
+export const checkOptOutOverlap = async (uid, newStartDate, newNumDays, ignoreId = null) => {
+  const newEnd = getOptOutEndDate(newStartDate, newNumDays);
+  const snap = await getDocs(query(collection(db, 'optouts'), where('uid', '==', uid)));
+  const clash = snap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(r => (r.status === 'pending' || r.status === 'approved') && r.id !== ignoreId)
+    .find(r => {
+      if (!r.startDate) return false;
+      const existingEnd = getOptOutEndDate(r.startDate, r.numDays);
+      return rangesOverlap(newStartDate, newEnd, r.startDate, existingEnd);
+    });
+  return clash || null;
+};
 
 /** Submit a new opt-out request */
 export const submitOptOut = async (uid, data) => {
   // Same-day opt-out block — UI bypass ho tab bhi guard rahe
   if (!data?.startDate || data.startDate <= TODAY()) {
     throw new Error('SAME_DAY_NOT_ALLOWED');
+  }
+  const days = Number(data.numDays) || 0;
+  if (!days || days < 1 || days > 30) throw new Error('INVALID_DAYS');
+  if (!data?.reason?.trim()) throw new Error('REASON_REQUIRED');
+  const clash = await checkOptOutOverlap(uid, data.startDate, days);
+  if (clash) {
+    const err = new Error('OVERLAP_EXISTS');
+    err.clash = clash;
+    throw err;
   }
   const ref = await addDoc(collection(db, 'optouts'), {
     uid,
@@ -94,33 +143,98 @@ export const listenPendingOptOuts = (callback) => {
 };
 
 /** Live listener for ALL opt-out requests (admin/committee overview) */
-export const listenAllOptOuts = (callback) => {
+export const listenAllOptOuts = (callback, max = 100) => {
   const q = query(
     collection(db, 'optouts'),
-    orderBy('submittedAt', 'desc')
+    orderBy('submittedAt', 'desc'),
+    limit(max)
   );
   return onSnapshot(q, snap =>
     callback(snap.docs.map(d => ({ id: d.id, ...d.data() })))
   );
 };
 
-/** Approve: status → 'approved', credit refund to wallet */
-export const approveOptOut = async (requestId, { uid, refundAmount, currentBalance }) => {
-  const batch = [
-    updateDoc(doc(db, 'optouts', requestId), {
-      status:      'approved',
-      processedAt: serverTimestamp(),
-    }),
-    updateWallet(uid, (currentBalance || 0) + refundAmount),
-  ];
-  await Promise.all(batch);
+/* ── Active opt-outs (gate check — blocklist doc ki jagah direct query) ── */
+
+/** UIDs jinka approved opt-out `dateISO` ko cover karta hai (one-shot, worker gate) */
+export const getActiveOptOutUIDs = async (dateISO = TODAY()) => {
+  const snap = await getDocs(
+    query(collection(db, 'optouts'), where('status', '==', 'approved'))
+  );
+  const set = new Set();
+  snap.docs.forEach(d => {
+    const r = d.data();
+    if (r.startDate && isDateInOptOutRange(dateISO, r.startDate, r.numDays)) set.add(r.uid);
+  });
+  return set;
 };
 
-/** Reject: status → 'rejected' */
-export const rejectOptOut = (requestId) =>
+/** Live version — committee approve karte hi gate list update */
+export const listenActiveOptOuts = (dateISO, callback) => {
+  const q = query(collection(db, 'optouts'), where('status', '==', 'approved'));
+  return onSnapshot(q, snap => {
+    const set = new Set();
+    const rows = [];
+    snap.docs.forEach(d => {
+      const r = { id: d.id, ...d.data() };
+      if (r.startDate && isDateInOptOutRange(dateISO, r.startDate, r.numDays)) {
+        set.add(r.uid);
+        rows.push(r);
+      }
+    });
+    callback(set, rows);
+  });
+};
+
+/** Student ka koi approved opt-out `dateISO` ko cover karta hai? (Routine banner + Token block) */
+export const listenMyActiveOptOut = (uid, dateISO, callback) => {
+  const q = query(collection(db, 'optouts'), where('uid', '==', uid), where('status', '==', 'approved'));
+  return onSnapshot(q, snap => {
+    const hit = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .find(r => r.startDate && isDateInOptOutRange(dateISO, r.startDate, r.numDays));
+    callback(hit || null);
+  });
+};
+
+/** Approve: status → 'approved', credit refund to wallet (transactional) */
+export const approveOptOut = async (requestId, { uid, refundAmount, processedBy = 'Committee' }) => {
+  // Wallet hamesha transaction me fresh read hota hai — stale balance / double-credit safe
+  await runTransaction(db, async (tx) => {
+    const optRef = doc(db, 'optouts', requestId);
+    const optSnap = await tx.get(optRef);
+    if (!optSnap.exists()) throw new Error('REQUEST_NOT_FOUND');
+    if (optSnap.data().status !== 'pending') throw new Error('ALREADY_PROCESSED');
+    const userRef = doc(db, 'users', uid);
+    const userSnap = await tx.get(userRef);
+    if (!userSnap.exists()) throw new Error('Student not found');
+    const freshBalance = userSnap.data().walletBalance || 0;
+    tx.update(optRef, {
+      status: 'approved',
+      processedAt: serverTimestamp(),
+      processedBy,
+    });
+    tx.update(userRef, {
+      walletBalance: freshBalance + (refundAmount || 0),
+      updatedAt: serverTimestamp(),
+    });
+  });
+};
+
+/** Reject: status → 'rejected' (reason mandatory — UI enforce karta hai) */
+export const rejectOptOut = (requestId, rejectReason = '', rejectedBy = 'Committee') =>
   updateDoc(doc(db, 'optouts', requestId), {
-    status:      'rejected',
+    status: 'rejected',
+    rejectReason: (rejectReason || '').trim(),
     processedAt: serverTimestamp(),
+    processedBy: rejectedBy,
+  });
+
+/** Student cancels own pending request — audit ke liye status='cancelled' */
+export const cancelOptOut = (requestId) =>
+  updateDoc(doc(db, 'optouts', requestId), {
+    status: 'cancelled',
+    cancelledAt: serverTimestamp(),
   });
 
 /** Get a student's own opt-out history */
@@ -169,7 +283,7 @@ export const getTodayBlocklist = async () => {
 };
 
 /** Rebuild blocklist from approved opt-outs for today
-    Called by committee after approving requests */
+    (Legacy — gate ab direct query use karta hai; sirf backward-compat ke liye rakha hai) */
 export const rebuildBlocklist = async () => {
   const today = TODAY();
   const snap  = await getDocs(
@@ -177,7 +291,7 @@ export const rebuildBlocklist = async () => {
   );
   const uids = snap.docs
     .map(d => d.data())
-    .filter(r => r.startDate <= today && r.startDate + r.numDays > today)
+    .filter(r => r.startDate && isDateInOptOutRange(today, r.startDate, r.numDays))
     .map(r => r.uid);
 
   await setDoc(doc(db, 'blocklist', today), { uids, updatedAt: serverTimestamp() });
@@ -202,11 +316,24 @@ export const listenMealScans = (date, mealKey, callback) =>
     snap => callback(snap.docs.map(d => ({ uid: d.id, ...d.data() })))
   );
 
-/** Get UIDs of students opted out today (for worker panel) */
-export const getTodayOptOutUIDs = async () => {
-  const today = TODAY();
-  const snap  = await getDoc(doc(db, 'blocklist', today));
-  return snap.exists() ? new Set(snap.data().uids || []) : new Set();
+/** Get UIDs of students opted out today (legacy wrapper — direct query use karta hai) */
+export const getTodayOptOutUIDs = (dateISO = TODAY()) => getActiveOptOutUIDs(dateISO);
+
+/* ── Opt-out violations (gate par denied entry ka audit) ── */
+
+/** Log a denied entry attempt (opted-out student ne gate par try kiya) */
+export const logDeniedScan = async (uid, mealKey, date, studentName = '', rollNumber = '') =>
+  addDoc(collection(db, 'violations'), {
+    uid, mealKey, date, studentName, rollNumber,
+    attemptedAt: serverTimestamp(),
+  });
+
+/** Live listener for recent violation attempts (committee/Ledger) */
+export const listenViolations = (callback, max = 50) => {
+  const q = query(collection(db, 'violations'), orderBy('attemptedAt', 'desc'), limit(max));
+  return onSnapshot(q, snap =>
+    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+  );
 };
 
 /* ── Penalties ──────────────────────────────────────────── */
@@ -252,6 +379,18 @@ export const listenPenalties = (callback) => {
   );
   return onSnapshot(q, snap =>
     callback(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+  );
+};
+
+/** Live listener for ONE student's penalties (student self-view, rules-safe) */
+export const listenMyPenalties = (uid, callback) => {
+  const q = query(collection(db, 'penalties'), where('uid', '==', uid));
+  return onSnapshot(q, snap =>
+    callback(
+      snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => (b.appliedAt?.seconds ?? 0) - (a.appliedAt?.seconds ?? 0))
+    )
   );
 };
 

@@ -4,7 +4,8 @@ import { format } from 'date-fns';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalBadge } from '../../components/ui';
 import TokenOverlay from '../../components/TokenOverlay';
-import { listenTodayMenu, listenAnnouncements } from '../../lib/firestoreService';
+import { listenTodayMenu, listenAnnouncements, listenMyActiveOptOut, getOptOutEndDate } from '../../lib/firestoreService';
+import { useAuth } from '../../context/AuthContext';
 
 
 
@@ -35,10 +36,13 @@ const STATUS_BADGE = {
 };
 
 export default function Routine({ direction }) {
+  const { user } = useAuth();
   const today = format(new Date(), 'EEEE, dd MMMM yyyy');
+  const todayISO = format(new Date(), 'yyyy-MM-dd');
   const [showToken, setShowToken] = useState(false);
   const [meals, setMeals] = useState(FALLBACK_MEALS);
   const [announcements, setAnnouncements] = useState([]);
+  const [activeOptOut, setActiveOptOut] = useState(null);
 
   // Live menu from Firestore
   useEffect(() => {
@@ -61,6 +65,13 @@ export default function Routine({ direction }) {
     return () => unsub?.();
   }, []);
 
+  // Am I opted out today? (gate deny hoga to pehle se pata chale)
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsub = listenMyActiveOptOut(user.uid, todayISO, setActiveOptOut);
+    return () => unsub?.();
+  }, [user?.uid, todayISO]);
+
   return (
     <>
       <AnimatedPage direction={direction} className="px-5 pt-5 pb-6">
@@ -80,6 +91,16 @@ export default function Routine({ direction }) {
             Show Token
           </motion.button>
         </div>
+
+        {activeOptOut && (
+          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}
+            className="mb-4 border-2 border-brand-dark rounded-brutal p-4 shadow-brutal-sm bg-brand-secondary">
+            <p className="font-sans font-bold text-sm">⛔ You are opted out today</p>
+            <p className="font-sans text-xs text-brand-dark/70 mt-0.5">
+              {activeOptOut.startDate} → {getOptOutEndDate(activeOptOut.startDate, activeOptOut.numDays)} · Gate par entry deny hogi.
+            </p>
+          </motion.div>
+        )}
 
         {/* Meal cards */}
         <div className="flex flex-col gap-4">

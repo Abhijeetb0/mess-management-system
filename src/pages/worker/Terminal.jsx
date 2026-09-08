@@ -8,8 +8,8 @@ import {
 } from 'lucide-react';
 import { BrutalCard } from '../../components/ui';
 import {
-  listenAllStudents, getTodayOptOutUIDs,
-  listenMealScans, recordScan,
+  listenAllStudents, listenActiveOptOuts, getActiveOptOutUIDs,
+  listenMealScans, recordScan, logDeniedScan, getUserByRollNumber, getUser,
 } from '../../lib/firestoreService';
 import { useAuth } from '../../context/AuthContext';
 
@@ -88,9 +88,10 @@ function StudentsPanel({ today, currentMeal }) {
     return () => unsub?.();
   }, []);
 
-  // Today's opt-outs
+  // Today's opt-outs — LIVE (committee approve karte hi update, blocklist doc nahi)
   useEffect(() => {
-    getTodayOptOutUIDs().then(setOptOutUIDs);
+    const unsub = listenActiveOptOuts(today, (set) => setOptOutUIDs(set));
+    return () => unsub?.();
   }, [today]);
 
   // Live scans for current meal
@@ -199,6 +200,8 @@ export default function Terminal() {
   const [result,    setResult]    = useState(null);
   const [camError,  setCamError]  = useState('');
   const [tab,       setTab]       = useState('scan'); // 'scan' | 'students'
+  const [manualRoll, setManualRoll] = useState('');
+  const [manualBusy, setManualBusy] = useState(false);
 
   const today       = format(new Date(), 'yyyy-MM-dd');
   const currentMeal = getCurrentMeal();
@@ -305,9 +308,13 @@ export default function Terminal() {
 
     const { uid, mealKey, meal } = parsed;
 
-    // Check opt-out
-    const optOutUIDs = await getTodayOptOutUIDs();
+    // Check opt-out (direct approved-query — hamesha fresh)
+    const optOutUIDs = await getActiveOptOutUIDs(today);
     if (optOutUIDs.has(uid)) {
+      try {
+        const prof = await getUser(uid);
+        await logDeniedScan(uid, mealKey, today, prof?.displayName || '', prof?.rollNumber || '');
+      } catch { /* audit log fail ho to bhi deny rahe */ }
       setResult({ status: 'denied', message: `Opted out — deny ${meal.label} entry.`, uid });
       setTimeout(() => setResult(null), 7000);
       return;
@@ -315,8 +322,12 @@ export default function Terminal() {
 
     // Record the scan
     try {
-      const profile = await import('../../lib/firestoreService')
-        .then(m => m.getUser(uid));
+      const profile = await getUser(uid);
+      if (profile && profile.isApproved === false) {
+        setResult({ status: 'denied', message: 'Account not approved — deny entry.', uid });
+        setTimeout(() => setResult(null), 7000);
+        return;
+      }
       await recordScan(uid, mealKey, today, profile?.displayName || '', profile?.rollNumber || '');
       setResult({
         status: 'allowed',
@@ -329,6 +340,45 @@ export default function Terminal() {
     }
     setTimeout(() => setResult(null), 6000);
   }, [today, stopCamera]); // eslint-disable-line
+
+  /* ── Manual roll entry fallback (camera fail / QR damage) ── */
+  const handleManualCheck = useCallback(async () => {
+    const roll = manualRoll.trim();
+    if (!roll || manualBusy) return;
+    if (!currentMeal) {
+      setResult({ status: 'error', message: 'No active meal right now.' });
+      setTimeout(() => setResult(null), 5000);
+      return;
+    }
+    setManualBusy(true);
+    try {
+      const profile = await getUserByRollNumber(roll);
+      if (!profile) {
+        setResult({ status: 'invalid', message: `No student found: ${roll}` });
+      } else if (profile.isApproved === false) {
+        setResult({ status: 'denied', message: 'Account not approved — deny entry.', uid: profile.uid });
+      } else {
+        const optOutUIDs = await getActiveOptOutUIDs(today);
+        if (optOutUIDs.has(profile.uid)) {
+          try { await logDeniedScan(profile.uid, currentMeal.key, today, profile.displayName || '', profile.rollNumber || ''); } catch {}
+          setResult({ status: 'denied', message: `Opted out — deny ${currentMeal.label} entry.`, uid: profile.uid });
+        } else {
+          await recordScan(profile.uid, currentMeal.key, today, profile.displayName || '', profile.rollNumber || '');
+          setResult({
+            status: 'allowed',
+            message: `${currentMeal.emoji} ${currentMeal.label} entry allowed`,
+            name: profile.displayName || profile.uid,
+            roll: profile.rollNumber || '',
+          });
+        }
+      }
+    } catch {
+      setResult({ status: 'error', message: 'Manual check failed. Try again.' });
+    } finally {
+      setManualBusy(false);
+      setTimeout(() => setResult(null), 6000);
+    }
+  }, [manualRoll, manualBusy, currentMeal, today]);
 
   /* ─── Result colours ─── */
   const RESULT_STYLE = {
@@ -527,6 +577,23 @@ export default function Terminal() {
                 <Camera size={16} />
                 Start Scanning
               </button>
+              {/* Manual fallback */}
+              <div className="w-full max-w-[320px] mt-6 border-2 border-brand-dark/20 rounded-brutal p-3 bg-white/60">
+                <p className="font-sans text-[10px] font-bold uppercase tracking-wider text-brand-light mb-2 text-center">
+                  Camera fail? Manual entry
+                </p>
+                <div className="flex gap-2">
+                  <input value={manualRoll} onChange={e => setManualRoll(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Enter') handleManualCheck(); }}
+                    placeholder="Roll no."
+                    className="flex-1 min-w-0 border-2 border-brand-dark rounded-brutal px-3 py-2 font-mono text-sm bg-white outline-none" />
+                  <button onClick={handleManualCheck} disabled={manualBusy || !manualRoll.trim()}
+                    className="font-sans font-bold text-xs px-4 py-2 bg-brand-dark text-brand-bg rounded-brutal border-2 border-brand-dark disabled:opacity-50 shrink-0"
+                  >
+                    {manualBusy ? '…' : 'Check'}
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 

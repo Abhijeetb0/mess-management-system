@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { format } from 'date-fns';
 import { QRCodeSVG } from 'qrcode.react';
 import { useAuth } from '../context/AuthContext';
+import { listenMyActiveOptOut, getOptOutEndDate } from '../lib/firestoreService';
 
 /* ─────────────────────────────────────────────────────────
    TokenOverlay — Student QR meal pass
@@ -61,6 +62,7 @@ function getActiveMeal() {
 export default function TokenOverlay({ onClose }) {
   const { user } = useAuth();
   const time     = useLiveClock();
+  const [optedOut, setOptedOut] = useState(null);
 
   const hour    = time.getHours();
   const meal    = getActiveMeal(hour);
@@ -68,8 +70,14 @@ export default function TokenOverlay({ onClose }) {
   const timeStr = format(time, 'h:mm:ss aa');
   const dayStr  = format(time, 'EEE, dd MMM yyyy');
 
-  // QR payload — changes per meal per day per student
-  const qrPayload = meal
+  useEffect(() => {
+    if (!user?.uid) return;
+    const unsub = listenMyActiveOptOut(user.uid, dateStr, setOptedOut);
+    return () => unsub?.();
+  }, [user?.uid, dateStr]);
+
+  // QR payload — changes per meal per day per student (opted-out ho to QR nahi)
+  const qrPayload = meal && !optedOut
     ? `GECMESS|${user?.uid}|${dateStr}|${meal.key}`
     : null;
   const [meal, setMeal] = useState(getActiveMeal);
@@ -124,7 +132,15 @@ export default function TokenOverlay({ onClose }) {
 
         {/* ── QR Code area ── */}
         <div className="flex flex-col items-center px-5 py-5">
-          {qrPayload ? (
+          {optedOut ? (
+            <div className="w-full rounded-brutal border-2 border-brand-dark p-4 bg-brand-secondary shadow-brutal-sm mb-3 text-center">
+              <p className="text-3xl mb-1">⛔</p>
+              <p className="font-sans font-bold text-sm text-brand-dark">You are opted out</p>
+              <p className="font-sans text-xs text-brand-dark/70 mt-1">
+                {optedOut.startDate} → {getOptOutEndDate(optedOut.startDate, optedOut.numDays)} · Gate par entry deny hogi.
+              </p>
+            </div>
+          ) : qrPayload ? (
             <>
               <div className="rounded-brutal border-2 border-brand-dark p-3 bg-white shadow-brutal-sm mb-3">
                 <QRCodeSVG

@@ -32,14 +32,23 @@ service cloud.firestore {
 
     // ── /optouts/{requestId} ──────────────────────────────
     match /optouts/{requestId} {
-      // Students can create their own opt-out
+      // Students can create their own opt-out (same-day block + sane ranges enforced)
       allow create: if isAuth()
         && request.resource.data.uid == uid()
-        && request.resource.data.status == 'pending';
+        && request.resource.data.status == 'pending'
+        && request.resource.data.startDate is string
+        && request.resource.data.numDays is number
+        && request.resource.data.numDays >= 1
+        && request.resource.data.numDays <= 30;
       // Students can read their own opt-outs
       allow read: if isAuth() && resource.data.uid == uid();
       // Committee can read all, update status
       allow read, update: if isCommittee();
+      // Student apni pending request khud cancel kar sakta hai (audit: status=pending→cancelled)
+      allow update: if isAuth()
+        && resource.data.uid == uid()
+        && resource.data.status == 'pending'
+        && request.resource.data.status == 'cancelled';
       allow delete: if isAdmin();
     }
 
@@ -88,6 +97,8 @@ service cloud.firestore {
 
     // ── /penalties/{id} ────────────────────────────────
     match /penalties/{id} {
+      // Student apni penalty dekh sakta hai (wallet kata to reason pata chale)
+      allow read: if isAuth() && resource.data.uid == uid();
       // Committee and admin can read all penalties
       allow read: if isCommittee();
       // Committee can create penalties
@@ -105,6 +116,14 @@ service cloud.firestore {
       allow create, update: if isWorker() || isCommittee();
       // Workers, committee, and admin can read scan records
       allow read: if isAuth() && (isWorker() || isCommittee());
+    }
+
+    // ── /violations/{id} (gate par denied entry attempts) ──
+    match /violations/{id} {
+      // Worker gate se log karta hai, committee padhta hai
+      allow create: if isWorker() || isCommittee();
+      allow read: if isAuth() && (isWorker() || isCommittee());
+      allow delete: if isAdmin() || isCommittee();
     }
   }
 }
