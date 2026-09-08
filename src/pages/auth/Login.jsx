@@ -19,6 +19,7 @@ export default function Login() {
   const [pass, setPass] = useState('');
   const [showPass, setShowPass] = useState(false);
   const [regRoll, setRegRoll] = useState('');
+  const [regName, setRegName] = useState('');
   const [regPass, setRegPass] = useState('');
   const [showRegPass, setShowRegPass] = useState(false);
   const [error, setError] = useState('');
@@ -28,6 +29,7 @@ export default function Login() {
   useEffect(() => {
     if (pendingGoogle) {
       setRegRoll('');
+      setRegName('');
       setRegPass('');
       setStep('complete-registration');
     }
@@ -59,14 +61,17 @@ export default function Login() {
   /* ── Complete registration for new Google users ── */
   const handleCompleteReg = async (e) => {
     e.preventDefault();
-    if (!regRoll.trim()) { setError('Please enter your registration number.'); return; }
-    if (!regPass.trim()) { setError('Please set a password for ID login.'); return; }
-    if (regPass.length < 6) { setError('Password must be at least 6 characters.'); return; }
+    const nameVal = regName.trim();
+    const rollVal = regRoll.trim();
+    if (!nameVal)                          { setError('Please enter your full name.'); return; }
+    if (!/^\d{11}$/.test(rollVal))         { setError('Registration number must be exactly 11 digits (numbers only).'); return; }
+    if (!regPass.trim())                   { setError('Please set a password for ID login.'); return; }
+    if (regPass.length < 6)               { setError('Password must be at least 6 characters.'); return; }
 
     setError('');
     setLoading(true);
     try {
-      await completeGoogleRegistration(regRoll.trim(), regPass);
+      await completeGoogleRegistration(rollVal, regPass, nameVal);
       // AuthContext sets user → App.jsx navigates to student panel
     } catch (err) {
       console.error('Registration error:', err);
@@ -173,18 +178,51 @@ export default function Login() {
                 </p>
               </div>
               <form onSubmit={handleCompleteReg} className="flex flex-col gap-4">
+                {/* Full Name */}
+                <div>
+                  <label className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5 block">
+                    Full Name
+                  </label>
+                  <input
+                    value={regName}
+                    onChange={e => setRegName(e.target.value)}
+                    placeholder="e.g. Rahul Kumar"
+                    autoFocus
+                    autoComplete="name"
+                    className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-sans text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
+                  />
+                </div>
+
+                {/* Registration Number */}
                 <div>
                   <label className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5 block">
                     Registration Number
+                    <span className="normal-case font-normal ml-1 text-brand-light/70">(11 digits)</span>
                   </label>
                   <input
                     value={regRoll}
-                    onChange={e => setRegRoll(e.target.value.toUpperCase())}
-                    placeholder="e.g. 25105157XXX"
-                    autoFocus
-                    className="w-full border-2 border-brand-dark rounded-brutal px-3 py-2.5 font-mono text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow"
+                    onChange={e => {
+                      // Allow only digits, max 11
+                      const digits = e.target.value.replace(/\D/g, '').slice(0, 11);
+                      setRegRoll(digits);
+                    }}
+                    placeholder="25105157XXX"
+                    inputMode="numeric"
+                    maxLength={11}
+                    className={`w-full border-2 rounded-brutal px-3 py-2.5 font-mono text-sm bg-brand-bg outline-none focus:shadow-brutal-sm transition-shadow
+                      ${regRoll.length > 0 && regRoll.length !== 11
+                        ? 'border-red-400'
+                        : 'border-brand-dark'}`}
                   />
+                  {regRoll.length > 0 && regRoll.length !== 11 && (
+                    <p className="font-sans text-[10px] text-red-500 mt-1">{regRoll.length}/11 digits entered</p>
+                  )}
+                  {regRoll.length === 11 && (
+                    <p className="font-sans text-[10px] text-green-600 mt-1">✓ Valid length</p>
+                  )}
                 </div>
+
+                {/* Password */}
                 <div>
                   <label className="font-sans font-semibold text-xs uppercase tracking-wider text-brand-light mb-1.5 block">
                     Set Password <span className="normal-case font-normal">(for ID login later)</span>
@@ -204,6 +242,7 @@ export default function Login() {
                     </button>
                   </div>
                 </div>
+
                 {error && <ErrorBanner message={error} />}
                 <BrutalButton type="submit" fullWidth size="lg" disabled={loading}>
                   {loading ? 'Saving…' : 'Complete Registration →'}

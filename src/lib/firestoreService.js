@@ -47,6 +47,27 @@ export const approveStudent = (uid) =>
 export const rejectStudent = (uid) =>
   updateDoc(doc(db, 'users', uid), { isApproved: false, updatedAt: serverTimestamp() });
 
+/**
+ * Persist token redemption to Firestore so any device that opens
+ * the overlay sees the same frozen timestamp.
+ * Stored as: users/{uid}.tokenRedemption = { date, redeemedAt (ms) }
+ */
+export const saveTokenRedemption = (uid, redeemedAtMs, date) =>
+  updateDoc(doc(db, 'users', uid), {
+    tokenRedemption: { date, redeemedAt: redeemedAtMs },
+  });
+
+/**
+ * Read back the token redemption state for a user.
+ * Returns { date, redeemedAt } or null if not found / expired.
+ */
+export const getTokenRedemption = async (uid) => {
+  const snap = await getDoc(doc(db, 'users', uid));
+  if (!snap.exists()) return null;
+  return snap.data().tokenRedemption ?? null;
+};
+
+
 /** Fetch all users with role = 'committee' */
 export const getAllCommittee = () =>
   getDocs(query(collection(db, 'users'), where('role', '==', 'committee')))

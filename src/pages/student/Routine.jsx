@@ -4,7 +4,8 @@ import { format } from 'date-fns';
 import AnimatedPage from '../../components/AnimatedPage';
 import { BrutalCard, BrutalBadge } from '../../components/ui';
 import TokenOverlay from '../../components/TokenOverlay';
-import { listenTodayMenu, listenAnnouncements } from '../../lib/firestoreService';
+import { listenTodayMenu, listenAnnouncements, getTokenRedemption } from '../../lib/firestoreService';
+import { useAuth } from '../../context/AuthContext';
 
 
 
@@ -50,7 +51,9 @@ function getRedeemedTimestamp() {
 }
 
 export default function Routine({ direction }) {
+  const { user } = useAuth();
   const today   = format(new Date(), 'EEEE, dd MMMM yyyy');
+  const dateKey = format(new Date(), 'yyyy-MM-dd');
   const [showToken,     setShowToken]     = useState(false);
   // tokenRedeemed: token was used and is within 20-min viewing window
   const [tokenRedeemed, setTokenRedeemed] = useState(() => !!getRedeemedTimestamp());
@@ -62,6 +65,24 @@ export default function Routine({ direction }) {
   });
   const [meals,         setMeals]         = useState(FALLBACK_MEALS);
   const [announcements, setAnnouncements] = useState([]);
+
+  // If localStorage is empty (different device / cleared), check Firestore
+  // so the button shows 'View Redeemed ✓' correctly without opening the overlay
+  useEffect(() => {
+    if (tokenRedeemed || tokenExpired) return; // already know state from localStorage
+    if (!user?.uid) return;
+    getTokenRedemption(user.uid).then((remote) => {
+      if (!remote || remote.date !== dateKey || !remote.redeemedAt) return;
+      const elapsed = Date.now() - remote.redeemedAt;
+      if (elapsed >= REDEEM_WINDOW_MS) {
+        setTokenExpired(true);
+      } else {
+        // Sync to localStorage so TokenOverlay can pick it up instantly
+        localStorage.setItem(LS_REDEEM_KEY(dateKey), String(remote.redeemedAt));
+        setTokenRedeemed(true);
+      }
+    }).catch(() => { /* offline — ignore */ });
+  }, [user?.uid]); // eslint-disable-line
 
 
   // Live menu from Firestore

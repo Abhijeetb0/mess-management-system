@@ -246,7 +246,7 @@ export function AuthProvider({ children }) {
   };
 
   /* ── Complete registration for new Google users ── */
-  const completeGoogleRegistration = async (rollNumber, password) => {
+  const completeGoogleRegistration = async (rollNumber, password, name) => {
     if (!pendingGoogle?.uid) throw new Error('No pending Google user');
     const fbUser = auth.currentUser;
     if (!fbUser) throw new Error('Auth state lost. Please sign in with Google again.');
@@ -263,13 +263,16 @@ export function AuthProvider({ children }) {
       throw err;
     }
 
+    // Use the name entered by the user; fall back to Google display name or roll number
+    const displayName = (name || pendingGoogle.displayName || rollNumber).trim();
+
     const profile = {
-      displayName:  pendingGoogle.displayName || rollNumber.toUpperCase(),
-      rollNumber:   rollNumber.toUpperCase(),
-      role:         'student',
+      displayName,
+      rollNumber:    rollNumber.toUpperCase(),
+      role:          'student',
       walletBalance: 0,
-      isActive:     true,
-      email:        pendingGoogle.email,
+      isActive:      true,
+      email:         pendingGoogle.email,
     };
     await setUser(pendingGoogle.uid, profile);
     await claimSession(pendingGoogle.uid);

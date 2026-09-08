@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuth } from '../context/AuthContext';
 import { getTodayToken, ANIM_COMPONENT_MAP } from '../utils/tokenUtils';
+import { saveTokenRedemption, getTokenRedemption } from '../lib/firestoreService';
 
 /* ────────────────────────────────────────────────────────
    TokenOverlay — Full-screen meal pass
@@ -54,23 +55,40 @@ export default function TokenOverlay({ onClose }) {
   const timeStr = format(displayTime, 'h:mm:ss aa');
   const dateStr = format(displayTime, 'EEE, dd MMM yyyy');
 
-  // ── Restore from localStorage on mount ──────────────────
+  // ── Restore redemption state on mount ──────────────────
+  // Priority: localStorage (fast, offline-capable) → Firestore (cross-device sync)
   useEffect(() => {
-    const stored = localStorage.getItem(LS_KEY(dateKey));
-    if (!stored) return;
-    const ts = Number(stored);
-    if (!ts) return;
-    const elapsed = Date.now() - ts;
-    if (elapsed >= REDEEM_WINDOW_MS) {
-      // Already expired before overlay was opened — close immediately (no expired flag,
-      // the parent's own expiry state will handle disabling the button)
-      localStorage.removeItem(LS_KEY(dateKey));
-      setExpired(true);
-      onCloseRef.current?.(); // no argument — parent will re-read localStorage
-    } else {
-      setRedeemedAt(ts);
-      scheduleExpiry(REDEEM_WINDOW_MS - elapsed);
-    }
+    const tryRestore = async () => {
+      // 1. Check localStorage first
+      const stored = localStorage.getItem(LS_KEY(dateKey));
+      let ts = stored ? Number(stored) : 0;
+
+      // 2. If not in localStorage, fetch from Firestore (different device / cleared storage)
+      if (!ts && user?.uid) {
+        try {
+          const remote = await getTokenRedemption(user.uid);
+          if (remote?.date === dateKey && remote?.redeemedAt) {
+            ts = remote.redeemedAt;
+            // Sync back to localStorage so subsequent checks are instant
+            localStorage.setItem(LS_KEY(dateKey), String(ts));
+          }
+        } catch { /* offline — skip */ }
+      }
+
+      if (!ts) return; // not redeemed today
+
+      const elapsed = Date.now() - ts;
+      if (elapsed >= REDEEM_WINDOW_MS) {
+        // Already expired — close immediately; parent will show 'Token Used'
+        localStorage.removeItem(LS_KEY(dateKey));
+        setExpired(true);
+        onCloseRef.current?.();
+      } else {
+        setRedeemedAt(ts);
+        scheduleExpiry(REDEEM_WINDOW_MS - elapsed);
+      }
+    };
+    tryRestore();
   }, []); // eslint-disable-line
 
   // ── Schedule the 20-min expiry timer ────────────────────
@@ -99,10 +117,17 @@ export default function TokenOverlay({ onClose }) {
       const now = Date.now();
       setRedeemedAt(now);
       setAnimating(false);
+      // 1. Save to localStorage (instant, offline-capable)
       localStorage.setItem(LS_KEY(dateKey), String(now));
+      // 2. Push to Firestore (cross-device sync) — fire-and-forget
+      if (user?.uid) {
+        saveTokenRedemption(user.uid, now, dateKey).catch(
+          (err) => console.warn('[Token] Firestore sync failed:', err)
+        );
+      }
       scheduleExpiry(REDEEM_WINDOW_MS);
     }, 500);
-  }, [redeemed, animating, dateKey, scheduleExpiry]);
+  }, [redeemed, animating, dateKey, scheduleExpiry, user]);
 
   // Remaining time display
   const [remaining, setRemaining] = useState('');
